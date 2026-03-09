@@ -278,6 +278,71 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 #debug-export-btn:hover { color: var(--muted); background: var(--bg3); opacity: 1; }
 #debug-export-btn:disabled { cursor: default; opacity: 0.2; }
 
+/* ─── GLOBAL SEARCH ─── */
+#gsearch-wrap { display:flex; align-items:center; gap:6px; }
+#gsearch-input {
+  width: 240px; background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 5px 10px; border-radius: 5px;
+  font-family: var(--font); font-size: 11px; transition: border-color .15s;
+}
+#gsearch-input:focus { outline: none; border-color: var(--blue); }
+#gsearch-input.invalid { border-color: var(--red) !important; }
+#gsearch-regex {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--muted);
+  padding: 3px 8px; border-radius: 5px; font-family: var(--font); font-size: 10px;
+  cursor: pointer; transition: all .15s; user-select: none; white-space: nowrap;
+}
+#gsearch-regex:hover { border-color: var(--muted); color: var(--text); }
+#gsearch-regex.active { background: var(--purple); border-color: var(--purple); color: var(--bg); }
+#gsearch-count { color: var(--muted); font-size: 10px; white-space: nowrap; min-width: 72px; }
+
+/* search results panel */
+#panel-search { padding: 0 !important; overflow: hidden !important; }
+#panel-search.active { display: flex !important; flex-direction: column; }
+#sr-header {
+  padding: 8px 14px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+}
+#sr-count { color: var(--cyan); font-size: 11px; font-weight: 600; }
+#sr-scroller { flex: 1; overflow-y: auto; position: relative; }
+.sr-row {
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  padding: 6px 14px; border-bottom: 1px solid rgba(38,48,68,.5);
+  cursor: pointer; background: var(--bg); transition: background .08s;
+  box-sizing: border-box;
+}
+.sr-row:hover { background: var(--bg3); }
+.sr-top { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.sr-seq { color: var(--muted); font-size: 10px; min-width: 46px; flex-shrink: 0; }
+.sr-type { font-size: 10px; min-width: 130px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sr-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.sr-field { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+.sr-field em { color: var(--purple); font-style: normal; }
+.sr-elapsed { color: var(--cyan); font-size: 10px; flex-shrink: 0; }
+.sr-status { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+.sr-status.fail { background: rgba(243,139,168,.15); color: var(--red); }
+.sr-status.warn { background: rgba(249,226,175,.15); color: var(--amber); }
+.sr-snippet { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 54px; }
+mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius: 2px; padding: 0 1px; }
+
+/* search progress */
+.search-progress { padding: 20px 16px; }
+#sp-bar-wrap { background: var(--bg3); border-radius: 3px; height: 4px; overflow: hidden; margin-bottom: 8px; }
+#sp-bar { height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: 3px; width: 0%; transition: width .08s; }
+#sp-text { color: var(--muted); font-size: 11px; }
+
+/* ─── SEARCH ACTIVE BANNER ─── */
+.gsearch-banner {
+  display: none; align-items: center; gap: 8px; padding: 4px 10px;
+  background: rgba(203,166,247,0.08); border-bottom: 1px solid rgba(203,166,247,0.25);
+  font-size: 10px; color: var(--purple); flex-shrink: 0;
+}
+.gsearch-banner.visible { display: flex; }
+.gsearch-banner .gsb-term { font-weight: 700; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gsearch-banner .gsb-count { color: var(--muted); }
+.gsearch-banner .gsb-clear { margin-left: auto; cursor: pointer; color: var(--muted); padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border); }
+.gsearch-banner .gsb-clear:hover { color: var(--text); border-color: var(--muted); }
+
 /* ─── MISC ─── */
 .empty-msg { text-align: center; color: var(--muted); padding: 40px; font-size: 12px; }
 .loading-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; }
@@ -291,6 +356,11 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
   <h1>PEGA <span>TRACER</span></h1>
   <span class="hdr-badge">XML VIEWER</span>
   <span id="filename"></span>
+  <div id="gsearch-wrap">
+    <input id="gsearch-input" type="text" placeholder="🔍 Search all fields + raw XML… (Ctrl+F)" oninput="onGlobalSearchInput()" onkeydown="if(event.key==='Escape')clearGlobalSearch()">
+    <span id="gsearch-regex" title="Toggle regex mode" onclick="toggleSearchRegex()">.*</span>
+    <span id="gsearch-count"></span>
+  </div>
   <button id="debug-export-btn" title="Export debug snapshot (stats + errors + samples) for email" onclick="exportDebugSnapshot()" disabled>⬇ debug</button>
   <button id="file-btn" onclick="document.getElementById('file-input').click()">📂 Open File</button>
   <input type="file" id="file-input" accept=".xml">
@@ -309,6 +379,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
     <div class="tab" data-tab="tree">Tree</div>
     <div class="tab" data-tab="table">Table</div>
     <div class="tab" data-tab="flame">Flamegraph</div>
+    <div class="tab" data-tab="search" id="search-tab" style="display:none">Search</div>
   </div>
 
   <div id="panels">
@@ -327,11 +398,15 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
     <div class="panel" id="panel-tree">
       <div id="tree-panel" style="height:100%;display:flex;flex-direction:column;">
         <div id="tree-toolbar">
-          <input type="text" id="tree-search" placeholder="Filter by name or event type..." oninput="filterTree(this.value)">
           <button class="tree-btn" onclick="expandAllTree()">Expand All</button>
           <button class="tree-btn" onclick="collapseAllTree()">Collapse All</button>
           <button class="tree-btn" id="btn-errors-only" onclick="toggleErrorsOnly()">Errors Only</button>
           <span style="color:var(--muted);font-size:10px;margin-left:auto;" id="tree-count"></span>
+        </div>
+        <div class="gsearch-banner" id="tree-gsearch-banner">
+          🔍 Filtered by: <span class="gsb-term" id="tree-gsb-term"></span>
+          <span class="gsb-count" id="tree-gsb-count"></span>
+          <span class="gsb-clear" onclick="clearGlobalSearch()">✕ clear</span>
         </div>
         <div id="tree-body"></div>
       </div>
@@ -341,17 +416,21 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
     <div class="panel" id="panel-table">
       <div id="table-panel" style="height:100%;display:flex;flex-direction:column;">
         <div id="table-toolbar">
-          <input type="text" id="tbl-search" placeholder="Search name, keyname..." oninput="filterTable()">
           <select id="tbl-status-filter" onchange="filterTable()">
             <option value="">All Statuses</option>
             <option value="Fail">Fail</option>
             <option value="Warning">Warning</option>
             <option value="Pass">Pass (empty)</option>
           </select>
-          <select id="tbl-type-filter" onchange="filterTable()" id="tbl-type-filter">
+          <select id="tbl-type-filter" onchange="filterTable()">
             <option value="">All Types</option>
           </select>
           <span id="tbl-count" style="color:var(--muted);font-size:11px;margin-left:auto;"></span>
+        </div>
+        <div class="gsearch-banner" id="table-gsearch-banner">
+          🔍 Filtered by: <span class="gsb-term" id="table-gsb-term"></span>
+          <span class="gsb-count" id="table-gsb-count"></span>
+          <span class="gsb-clear" onclick="clearGlobalSearch()">✕ clear</span>
         </div>
         <div id="table-header">
           <div class="th sorted" data-col="seq" onclick="sortTable('seq')">SEQ</div>
@@ -394,6 +473,15 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
           <div class="ft-elapsed" id="ft-elapsed"></div>
         </div>
       </div>
+    </div>
+    <!-- SEARCH RESULTS -->
+    <div class="panel" id="panel-search">
+      <div id="sr-header">
+        <span id="sr-count">No search active</span>
+        <span style="color:var(--muted);font-size:10px;">Click a result to open detail panel</span>
+        <span style="margin-left:auto;color:var(--muted);font-size:10px;" id="sr-regex-label"></span>
+      </div>
+      <div id="sr-scroller"></div>
     </div>
   </div>
 </div>
@@ -865,17 +953,24 @@ function renderTree() {
   // Build flat visible list
   const flat = [];
   const errOnly = state.errorsOnlyTree;
-  const search = state.treeSearch.toLowerCase();
 
   function flatten(nodes) {
     for (const node of nodes) {
-      let show = true;
-      if (errOnly && !nodeHasError(node)) show = false;
-      if (search && !matchesSearch(node, search)) show = false;
-      if (show) {
-        flat.push(node);
-        if (state.treeExpanded.has(node.seq) && node.children.length) {
-          flatten(node.children);
+      if (gsearch.active) {
+        // Global search mode: show matched nodes, always recurse to find deeper matches
+        if (gsearch.matchedSeqs.has(node.seq) && (!errOnly || nodeHasError(node))) {
+          flat.push(node);
+        }
+        if (node.children.length) flatten(node.children);
+      } else {
+        // Normal mode: respect errOnly and expand/collapse state
+        let show = true;
+        if (errOnly && !nodeHasError(node)) show = false;
+        if (show) {
+          flat.push(node);
+          if (state.treeExpanded.has(node.seq) && node.children.length) {
+            flatten(node.children);
+          }
         }
       }
     }
@@ -883,7 +978,10 @@ function renderTree() {
   flatten(state.treeRoots);
   state.flatTree = flat;
 
-  document.getElementById('tree-count').textContent = `${flat.length.toLocaleString()} visible`;
+  const totalLabel = gsearch.active
+    ? `${flat.length.toLocaleString()} matched`
+    : `${flat.length.toLocaleString()} visible`;
+  document.getElementById('tree-count').textContent = totalLabel;
 
   // Render
   let html = '';
@@ -985,18 +1083,12 @@ function populateTypeFilter() {
 }
 
 function filterTable() {
-  const q = document.getElementById('tbl-search').value.toLowerCase();
+  // Base pool: matched events when global search active, all events otherwise
+  const basePool = gsearch.active ? gsearch.matchedEventsArr : state.events;
   const st = document.getElementById('tbl-status-filter').value;
   const ty = document.getElementById('tbl-type-filter').value;
 
-  state.filteredEvents = state.events.filter(ev => {
-    if (q && !(
-      (ev.keyname||'').toLowerCase().includes(q) ||
-      (ev.name||'').toLowerCase().includes(q) ||
-      (ev.eventType||'').toLowerCase().includes(q) ||
-      (ev.stepMethod||'').toLowerCase().includes(q) ||
-      (ev.threadName||'').toLowerCase().includes(q)
-    )) return false;
+  state.filteredEvents = basePool.filter(ev => {
     if (st) {
       if (st === 'Pass' && ev.stepStatus !== '') return false;
       else if (st !== 'Pass' && ev.stepStatus !== st) return false;
@@ -1008,7 +1100,6 @@ function filterTable() {
   sortFilteredEvents();
   renderTableView();
 }
-
 function sortTable(col) {
   if (state.tableSortCol === col) {
     state.tableSortDir = state.tableSortDir === 'asc' ? 'desc' : 'asc';
@@ -1946,12 +2037,279 @@ function exportDebugSnapshot() {
 }
 
 // ═══════════════════════════════════════════════════════
+//  GLOBAL SEARCH
+//  Searches all parsed fields + rawXml, supports regex.
+//  Runs asynchronously in chunks to stay responsive on
+//  500k-event traces.
+// ═══════════════════════════════════════════════════════
+const gsearch = {
+  active: false,
+  useRegex: false,
+  term: '',
+  results: [],         // [{ev, matchField, snippet}]
+  matchedSeqs: new Set(),   // seqs of all matched events (for tree/table filtering)
+  matchedEventsArr: [],     // matched events array (base pool for table)
+  searchId: 0,         // cancel stale async runs
+  debounceTimer: null,
+};
+
+// All fields we search per event (label → value getter)
+const SEARCH_FIELDS = [
+  ['eventType',  e => e.eventType],
+  ['keyname',    e => e.keyname],
+  ['name',       e => e.name],
+  ['stepStatus', e => e.stepStatus],
+  ['stepMethod', e => e.stepMethod],
+  ['stepPage',   e => e.stepPage],
+  ['step',       e => e.step],
+  ['message',    e => e.message],
+  ['threadName', e => e.threadName],
+  ['interaction',e => e.interaction],
+  ['workPool',   e => e.workPool],
+  ['inskey',     e => e.inskey],
+  ['rsname',     e => e.rsname],
+  ['dateTime',   e => e.dateTime],
+  ['rawXml',     e => e.rawXml],
+];
+
+function onGlobalSearchInput() {
+  const val = document.getElementById('gsearch-input').value;
+  clearTimeout(gsearch.debounceTimer);
+  gsearch.debounceTimer = setTimeout(() => runGlobalSearch(val), 180);
+}
+
+function toggleSearchRegex() {
+  gsearch.useRegex = !gsearch.useRegex;
+  document.getElementById('gsearch-regex').classList.toggle('active', gsearch.useRegex);
+  const val = document.getElementById('gsearch-input').value;
+  if (val) runGlobalSearch(val);
+}
+
+function clearGlobalSearch() {
+  document.getElementById('gsearch-input').value = '';
+  document.getElementById('gsearch-input').classList.remove('invalid');
+  document.getElementById('gsearch-count').textContent = '';
+  gsearch.active = false;
+  gsearch.results = [];
+  gsearch.matchedSeqs = new Set();
+  gsearch.matchedEventsArr = [];
+  gsearch.searchId++;
+  // Hide the search tab and switch back to summary if we're on it
+  document.getElementById('search-tab').style.display = 'none';
+  if (state.currentTab === 'search') switchTab('summary');
+  // Re-render tree and table without search filter
+  updateSearchBanners();
+  filterTable();
+  renderTree();
+}
+
+function runGlobalSearch(term) {
+  gsearch.term = term;
+  const myId = ++gsearch.searchId;
+
+  if (!term.trim() || !state.events.length) {
+    clearGlobalSearch();
+    return;
+  }
+
+  // Validate regex if in regex mode
+  let re = null;
+  if (gsearch.useRegex) {
+    try {
+      re = new RegExp(term, 'i');
+      document.getElementById('gsearch-input').classList.remove('invalid');
+    } catch(e) {
+      document.getElementById('gsearch-input').classList.add('invalid');
+      document.getElementById('gsearch-count').textContent = 'invalid regex';
+      return;
+    }
+  } else {
+    document.getElementById('gsearch-input').classList.remove('invalid');
+  }
+
+  const lterm = term.toLowerCase();
+  const matchFn = gsearch.useRegex
+    ? (s) => re.test(s)
+    : (s) => s.toLowerCase().includes(lterm);
+
+  // Show search tab, switch to it
+  document.getElementById('search-tab').style.display = '';
+  switchTab('search');
+  document.getElementById('sr-count').textContent = 'Searching…';
+  document.getElementById('sr-regex-label').textContent = gsearch.useRegex ? '⚡ regex mode' : '';
+
+  gsearch.results = [];
+  const events = state.events;
+  const total = events.length;
+  const CHUNK = 3000;
+  let idx = 0;
+
+  function processChunk() {
+    if (myId !== gsearch.searchId) return; // superseded
+
+    const end = Math.min(idx + CHUNK, total);
+    for (let i = idx; i < end; i++) {
+      const ev = events[i];
+      for (const [field, getter] of SEARCH_FIELDS) {
+        const val = getter(ev);
+        if (!val) continue;
+        if (matchFn(val)) {
+          // Find a snippet around the match
+          const snippet = makeSnippet(val, term, gsearch.useRegex ? re : null, lterm);
+          gsearch.results.push({ ev, matchField: field, snippet });
+          break; // only record first matching field per event
+        }
+      }
+    }
+    idx = end;
+
+    const pct = Math.round(idx / total * 100);
+    document.getElementById('sr-count').textContent =
+      `${gsearch.results.length.toLocaleString()} matches (${pct}%)…`;
+
+    if (idx < total) {
+      setTimeout(processChunk, 0);
+    } else {
+      // Done — build match data and propagate to all views
+      gsearch.active = true;
+      gsearch.matchedSeqs = new Set(gsearch.results.map(r => r.ev.seq));
+      gsearch.matchedEventsArr = gsearch.results.map(r => r.ev);
+
+      document.getElementById('sr-count').textContent =
+        `${gsearch.results.length.toLocaleString()} match${gsearch.results.length !== 1 ? 'es' : ''} in ${total.toLocaleString()} events`;
+      document.getElementById('gsearch-count').textContent =
+        gsearch.results.length ? `${gsearch.results.length.toLocaleString()} hits` : 'no hits';
+
+      updateSearchBanners();
+      filterTable();
+      renderTree();
+      renderSearchResults();
+    }
+  }
+
+  setTimeout(processChunk, 0);
+}
+
+function makeSnippet(text, term, re, lterm) {
+  if (!text) return '';
+  const str = String(text);
+  let idx = -1;
+  if (re) {
+    const m = re.exec(str);
+    if (m) idx = m.index;
+  } else {
+    idx = str.toLowerCase().indexOf(lterm);
+  }
+  if (idx === -1) return str.slice(0, 100);
+  const start = Math.max(0, idx - 40);
+  const end = Math.min(str.length, idx + 100);
+  return (start > 0 ? '…' : '') + str.slice(start, end) + (end < str.length ? '…' : '');
+}
+
+function highlightSnippet(snippet, term, re, lterm) {
+  // Escape HTML first, then wrap match in <mark>
+  const safe = escHtml(snippet);
+  if (!term) return safe;
+  try {
+    const flagRe = re ? new RegExp(re.source, 'gi') : new RegExp(escRegex(term), 'gi');
+    return safe.replace(flagRe, m => `<mark class="sh">${escHtml(m)}</mark>`);
+  } catch(e) {
+    return safe;
+  }
+}
+
+function escRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const SR_ROW_H = 52;
+
+function renderSearchResults() {
+  const scroller = document.getElementById('sr-scroller');
+  const results = gsearch.results;
+  if (!results.length) {
+    scroller.innerHTML = '<div class="empty-msg">No matches found.</div>';
+    return;
+  }
+
+  // Virtual scroll
+  const totalH = results.length * SR_ROW_H;
+  scroller.innerHTML = `<div id="sr-inner" style="position:relative;height:${totalH}px;"></div>`;
+  const inner = document.getElementById('sr-inner');
+
+  function renderVisible() {
+    const scrollTop = scroller.scrollTop;
+    const clientH = scroller.clientHeight;
+    const startI = Math.max(0, Math.floor(scrollTop / SR_ROW_H) - 3);
+    const endI = Math.min(results.length, Math.ceil((scrollTop + clientH) / SR_ROW_H) + 3);
+
+    let html = '';
+    const re = gsearch.useRegex ? (() => { try { return new RegExp(gsearch.term, 'i'); } catch(e) { return null; } })() : null;
+    const lterm = gsearch.term.toLowerCase();
+
+    for (let i = startI; i < endI; i++) {
+      const { ev, matchField, snippet } = results[i];
+      const y = i * SR_ROW_H;
+      const etClass = getEventTypeClass(ev.eventType);
+      const st = ev.stepStatus;
+      const statusHtml = st ? `<span class="sr-status ${st.toLowerCase() === 'fail' ? 'fail' : 'warn'}">${escHtml(st)}</span>` : '';
+      const displayName = escHtml((ev.keyname || ev.name || '').slice(0, 80));
+      const snippetHtml = highlightSnippet(snippet, gsearch.term, re, lterm);
+      const fieldLabel = matchField === 'rawXml' ? '<em>raw xml</em>' : `<em>${matchField}</em>`;
+
+      html += `<div class="sr-row" style="position:absolute;top:${y}px;left:0;right:0;height:${SR_ROW_H}px;"
+          onclick="showEventDetail(${ev.seq})">
+        <div class="sr-top">
+          <span class="sr-seq">#${ev.seq}</span>
+          <span class="sr-type ${etClass}">${escHtml(ev.eventType || '')}</span>
+          <span class="sr-name">${displayName}</span>
+          ${statusHtml}
+          <span class="sr-field">in ${fieldLabel}</span>
+          <span class="sr-elapsed">${formatElapsed(ev.elapsed)}</span>
+        </div>
+        <div class="sr-snippet">${snippetHtml}</div>
+      </div>`;
+    }
+    inner.innerHTML = html;
+  }
+
+  scroller.addEventListener('scroll', renderVisible, { passive: true });
+  renderVisible();
+}
+
+function updateSearchBanners() {
+  const active = gsearch.active;
+  const term = gsearch.term;
+  const count = gsearch.matchedEventsArr.length;
+  const countTxt = `— ${count.toLocaleString()} event${count !== 1 ? 's' : ''}`;
+
+  ['tree', 'table'].forEach(view => {
+    const banner = document.getElementById(`${view}-gsearch-banner`);
+    const termEl = document.getElementById(`${view}-gsb-term`);
+    const countEl = document.getElementById(`${view}-gsb-count`);
+    if (!banner) return;
+    banner.classList.toggle('visible', active);
+    if (termEl) termEl.textContent = term;
+    if (countEl) countEl.textContent = active ? countTxt : '';
+  });
+}
+
+// ═══════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════
 window.addEventListener('load', () => {
   initDragDrop();
   initFlameEvents();
   renderSummary();
+
+  // Ctrl+F / Cmd+F → focus global search
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      document.getElementById('gsearch-input').focus();
+      document.getElementById('gsearch-input').select();
+    }
+  });
 
   // Handle window resize for flamegraph
   window.addEventListener('resize', () => {
