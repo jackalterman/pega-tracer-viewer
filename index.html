@@ -1382,6 +1382,7 @@ function loadFile(file) {
   document.getElementById('filename').textContent = file.name + ` (${(file.size/1024/1024).toFixed(1)} MB)`;
   document.getElementById('debug-export-btn').disabled = true;
   debugCollector.reset();
+  sanitizer.reset();
 
   // Show progress
   const progressArea = document.getElementById('progress-area');
@@ -1480,6 +1481,150 @@ function escHtml(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+
+// ═══════════════════════════════════════════════════════
+//  SANITIZER  — scrubs PII before export
+//  Uses consistent tokenisation: same real value → same
+//  fake token every time, so structure/correlations survive
+// ═══════════════════════════════════════════════════════
+const sanitizer = {
+  // Maps real value → stable fake token
+  _map: new Map(),
+  _counters: {},
+
+  reset() { this._map.clear(); this._counters = {}; },
+
+  // Return (or create) a stable token for a real value
+  _token(category, realValue) {
+    const key = category + ':' + realValue;
+    if (this._map.has(key)) return this._map.get(key);
+    const n = (this._counters[category] = (this._counters[category] || 0) + 1);
+    let token;
+    switch (category) {
+      case 'email':    token = `user${n}@example-redacted.com`; break;
+      case 'ip4':      token = `10.REDACTED.REDACTED.${n}`; break;
+      case 'ip6':      token = `[ipv6-redacted-${n}]`; break;
+      case 'host':     token = `HOSTNAME-${n}.redacted.internal`; break;
+      case 'url':      token = `https://REDACTED-HOST-${n}/path`; break;
+      case 'operator': token = `OPERATOR-${n}`; break;
+      case 'casekey':  token = `CASE-REDACTED-${n}`; break;
+      case 'ssn':      token = `SSN-REDACTED-${n}`; break;
+      case 'phone':    token = `PHONE-REDACTED-${n}`; break;
+      case 'jwt':      token = `[JWT-REDACTED-${n}]`; break;
+      case 'b64long':  token = `[BASE64-REDACTED-${n}]`; break;
+      default:         token = `REDACTED-${category.toUpperCase()}-${n}`;
+    }
+    this._map.set(key, token);
+    return token;
+  },
+
+  // Main entry: sanitize a string, returns cleaned string + count of replacements
+  clean(text) {
+    if (!text) return text;
+    let out = text;
+    let hits = 0;
+    const rep = (cat, real) => { hits++; return this._token(cat, real); };
+
+    // ── order matters: most specific first ──────────────
+
+    // JWTs  (three base64url segments separated by dots)
+    out = out.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+      m => rep('jwt', m));
+
+    // Long base64 blobs (40+ chars of pure base64, likely credentials/tokens)
+    out = out.replace(/\b[A-Za-z0-9+\/]{40,}={0,2}\b/g,
+      m => rep('b64long', m));
+
+    // Email addresses
+    out = out.replace(/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g,
+      m => rep('email', m.toLowerCase()));
+
+    // Full URLs (http/https/ftp)
+    out = out.replace(/https?:\/\/[^\s"'<>\]},]+/g,
+      m => rep('url', m));
+
+    // IPv4 addresses (not things like version numbers x.x)
+    out = out.replace(/\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g,
+      m => rep('ip4', m));
+
+    // IPv6 addresses
+    out = out.replace(/\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b/g,
+      m => rep('ip6', m));
+
+    // US SSNs  123-45-6789
+    out = out.replace(/\b\d{3}-\d{2}-\d{4}\b/g,
+      m => rep('ssn', m));
+
+    // Phone numbers  +1 (555) 123-4567  or  555-123-4567  etc.
+    out = out.replace(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b/g,
+      m => rep('phone', m));
+
+    // Pega operator IDs: typically look like FIRST.LAST or CORP\user or short all-caps IDs
+    // Pattern: word chars with a dot or backslash in the middle (not version numbers)
+    out = out.replace(/\b[A-Za-z]{2,}[.\-\\][A-Za-z]{2,}(?:[.\-\\][A-Za-z0-9]{1,})*\b/g, m => {
+      // Skip obvious non-PII: version strings like 01-01-01, rule names like Step-End
+      if (/^\d/.test(m)) return m;
+      if (/^(Step|Flow|Activity|Decision|Data|DB|Connect|Service|Validate|Exception)/i.test(m)) return m;
+      return rep('operator', m);
+    });
+
+    // Pega case/work item keys  MYCO-WORK-MYCLASS-12345
+    out = out.replace(/\b[A-Z][A-Z0-9]{1,10}-[A-Z][A-Z0-9]{1,10}-[A-Z][A-Z0-9]{1,20}-\d{1,10}\b/g,
+      m => rep('casekey', m));
+
+    // Hostnames that look like internal servers: letters+digits+hyphens with TLD or .internal/.corp etc.
+    out = out.replace(/\b(?:[a-z][a-z0-9\-]{2,}\.){1,4}(?:internal|corp|local|intranet|company|org|net|co|io|com)\b/gi,
+      m => rep('host', m.toLowerCase()));
+
+    return { text: out, hits };
+  },
+
+  // Sanitize just attribute values inside an XML tag opening  attr="value"
+  cleanXmlAttrs(xmlStr) {
+    return xmlStr.replace(/="([^"]*)"/g, (full, val) => {
+      const { text } = this.clean(val);
+      return `="${text}"`;
+    });
+  },
+
+  // Sanitize a full XML string (attrs + text content, skip CDATA placeholders)
+  cleanXml(xmlStr) {
+    // Don't touch already-stripped CDATA placeholders
+    let out = xmlStr.replace(/="([^"]*)"/g, (full, val) => {
+      const { text } = this.clean(val);
+      return `="${text}"`;
+    });
+    // Text content between tags
+    out = out.replace(/>([^<]+)</g, (full, content) => {
+      const { text } = this.clean(content);
+      return `>${text}<`;
+    });
+    return out;
+  },
+
+  // Summary of what was replaced (for the header comment)
+  summary() {
+    const lines = [];
+    lines.push('  SANITIZATION APPLIED — real values replaced with stable tokens:');
+    const cats = {};
+    for (const [key] of this._map) {
+      const cat = key.split(':')[0];
+      cats[cat] = (cats[cat] || 0) + 1;
+    }
+    if (Object.keys(cats).length === 0) {
+      lines.push('    (no sensitive patterns detected)');
+    } else {
+      for (const [cat, count] of Object.entries(cats).sort()) {
+        lines.push(`    ${count.toString().padStart(4)}  ${cat} value(s) tokenised`);
+      }
+      lines.push('');
+      lines.push('  Token consistency guarantee: identical real values → identical tokens.');
+      lines.push('  This means cross-references (same operator across events) are preserved.');
+      lines.push('  Tokens are NOT reversible — real values exist only in the source file.');
+    }
+    return lines.join('\n');
+  }
+};
 
 // ═══════════════════════════════════════════════════════
 //  DEBUG SNAPSHOT EXPORT
@@ -1672,8 +1817,13 @@ function exportDebugSnapshot() {
   lines.push('║          PEGA TRACER VIEWER — DEBUG SNAPSHOT         ║');
   lines.push('╚══════════════════════════════════════════════════════╝');
   lines.push('');
+  // Run sanitizer first pass over stats strings (threads, workpools, names)
+  // The sanitizer builds its token map progressively — we run it over all
+  // summary text so that tokens are pre-seeded before the XML events.
+  const cleanStr = s => sanitizer.clean(String(s || '')).text;
+
   lines.push(`  Generated : ${new Date().toISOString()}`);
-  lines.push(`  Source    : ${srcFile}`);
+  lines.push(`  Source    : ${cleanStr(srcFile)}`);
   lines.push(`  Full trace: ${total.toLocaleString()} events`);
   lines.push(`  Snapshot  : ${seqs.length.toLocaleString()} events included`);
   lines.push('');
@@ -1687,12 +1837,12 @@ function exportDebugSnapshot() {
   lines.push(`  Failures         : ${s.fails.length}`);
   lines.push(`  Warnings         : ${s.warnings.length}`);
   lines.push(`  Exceptions       : ${s.exceptions.length}`);
-  lines.push(`  Threads          : ${[...s.threads].join(', ')}`);
+  lines.push(`  Threads          : ${cleanStr([...s.threads].join(', '))}`);
   lines.push(`  Interactions     : ${s.interactions.size}`);
   lines.push(`  Date start       : ${formatDateTime(s.dateRange.start)}`);
   lines.push(`  Date end         : ${formatDateTime(s.dateRange.end)}`);
   lines.push(`  Seq range        : ${s.minSeq} – ${s.maxSeq}`);
-  lines.push(`  Slowest op       : ${s.slowest.length ? formatElapsed(s.slowest[0].elapsed) + ' — ' + (s.slowest[0].keyname || s.slowest[0].eventType) : 'N/A'}`);
+  lines.push(`  Slowest op       : ${s.slowest.length ? formatElapsed(s.slowest[0].elapsed) + ' — ' + cleanStr(s.slowest[0].keyname || s.slowest[0].eventType) : 'N/A'}`);
   lines.push('');
   lines.push('  EVENT TYPE COUNTS (all events):');
   for (const [et, cnt] of Object.entries(s.eventTypeCounts).sort((a,b)=>b[1]-a[1])) {
@@ -1713,10 +1863,18 @@ function exportDebugSnapshot() {
   lines.push('');
 
   // ── SECTION 3: Schema fingerprint ───────────────────
-  lines.push(debugCollector.buildSchemaReport());
+  lines.push(sanitizer.cleanXml(debugCollector.buildSchemaReport()));
 
   // ── SECTION 4: Per-eventType raw samples ────────────
-  lines.push(debugCollector.buildSamplesSection());
+  lines.push(sanitizer.cleanXml(debugCollector.buildSamplesSection()));
+
+  // ── SECTION 5: Sanitization report ──────────────────
+  lines.push('  ┌─────────────────────────────────────────────────────┐');
+  lines.push('  │  SANITIZATION REPORT                                 │');
+  lines.push('  └─────────────────────────────────────────────────────┘');
+  lines.push('');
+  lines.push(sanitizer.summary());
+  lines.push('');
 
   lines.push('-->');
   lines.push('');
@@ -1739,9 +1897,9 @@ function exportDebugSnapshot() {
     prevSeq = seq;
 
     if (ev.rawXml && !ev.rawXml.endsWith('... [truncated]')) {
-      // Strip CDATA from exported events — keeps file small, structure visible
+      // Strip CDATA content + sanitize PII
       const stripped = ev.rawXml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '<![CDATA[...stripped...]]>');
-      lines.push('  ' + stripped.trim());
+      lines.push('  ' + sanitizer.cleanXml(stripped.trim()));
     } else {
       let xml = `  <TraceEvent`;
       xml += ` sequence="${escAttr(ev.seq)}"`;
@@ -1752,17 +1910,17 @@ function exportDebugSnapshot() {
       xml += ` stepStatus="${escAttr(ev.stepStatus)}"`;
       xml += ` eventType="${escAttr(ev.eventType)}"`;
       xml += ` elapsed="${escAttr(ev.elapsed || '')}"`;
-      xml += ` name="${escAttr(ev.name)}"`;
-      xml += ` inskey="${escAttr(ev.inskey)}"`;
-      xml += ` keyname="${escAttr(ev.keyname)}"`;
-      xml += ` rsname="${escAttr(ev.rsname)}"`;
+      xml += ` name="${escAttr(cleanStr(ev.name))}"`;
+      xml += ` inskey="${escAttr(cleanStr(ev.inskey))}"`;
+      xml += ` keyname="${escAttr(cleanStr(ev.keyname))}"`;
+      xml += ` rsname="${escAttr(cleanStr(ev.rsname))}"`;
       xml += ` rsvers="${escAttr(ev.rsvers)}"`;
       xml += `>`;
       if (ev.dateTime)    xml += `<DateTime>${escAttr(ev.dateTime)}</DateTime>`;
       if (ev.interaction) xml += `<Interaction>${escAttr(ev.interaction)}</Interaction>`;
-      if (ev.threadName)  xml += `<ThreadName>${escAttr(ev.threadName)}</ThreadName>`;
-      if (ev.workPool)    xml += `<WorkPool>${escAttr(ev.workPool)}</WorkPool>`;
-      if (ev.message)     xml += `<Message>${escAttr(ev.message)}</Message>`;
+      if (ev.threadName)  xml += `<ThreadName>${escAttr(cleanStr(ev.threadName))}</ThreadName>`;
+      if (ev.workPool)    xml += `<WorkPool>${escAttr(cleanStr(ev.workPool))}</WorkPool>`;
+      if (ev.message)     xml += `<Message>${escAttr(cleanStr(ev.message))}</Message>`;
       xml += `</TraceEvent><!-- reconstructed — rawXml was truncated at 8KB -->`;
       lines.push(xml);
     }
@@ -1777,7 +1935,7 @@ function exportDebugSnapshot() {
 
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `pega-debug-snapshot-${ts}.xml`;
+  a.download = `pega-debug-snapshot-SANITIZED-${ts}.xml`;
   a.click();
   URL.revokeObjectURL(a.href);
 
