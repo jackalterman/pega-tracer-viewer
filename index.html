@@ -1850,17 +1850,25 @@ const debugCollector = {
     return lines.join('\n');
   },
 
-  // One raw sample per eventType (CDATA stripped, structure preserved)
+  // One raw sample per eventType — attribute VALUES stripped, only structure retained.
+  // This shows the schema shape (which attributes/children exist) without any data.
   buildSamplesSection() {
     const lines = [];
     lines.push('  ┌─────────────────────────────────────────────────────┐');
-    lines.push('  │  FIRST RAW XML SAMPLE PER EVENT TYPE                │');
-    lines.push('  │  (CDATA content stripped, tag structure preserved)  │');
+    lines.push('  │  SCHEMA SAMPLES PER EVENT TYPE                       │');
+    lines.push('  │  (attribute values + text content removed)           │');
     lines.push('  └─────────────────────────────────────────────────────┘');
     lines.push('');
     for (const [et, sample] of Object.entries(this.eventTypeSamples).sort()) {
       lines.push(`  ── ${et} ──`);
-      lines.push('  ' + sample.replace(/\n/g, '\n  '));
+      // Strip all attribute values (keep only attribute names for schema purposes)
+      // Strip all text content between tags
+      // Strip all CDATA content
+      let scrubbed = sample
+        .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '<![CDATA[...stripped...]]>')
+        .replace(/="[^"]*"/g, '="..."')
+        .replace(/>([^<]+)</g, '>[...text stripped...]<');
+      lines.push('  ' + scrubbed.replace(/\n/g, '\n  '));
       lines.push('');
     }
     return lines.join('\n');
@@ -1876,149 +1884,39 @@ function exportDebugSnapshot() {
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const srcFile = document.getElementById('filename').textContent;
 
-  // ── Decide which events to include ──────────────────
-  const included = new Set();
-
-  // 1. ALL failures, exceptions, warnings (full fidelity for what matters)
-  for (const ev of s.fails)      included.add(ev.seq);
-  for (const ev of s.exceptions) included.add(ev.seq);
-  for (const ev of s.warnings)   included.add(ev.seq);
-
-  // 2. Top 50 slowest events
-  for (const ev of s.slowest.slice(0, 50)) included.add(ev.seq);
-
-  // 3. First 300 events (trace entry context)
-  for (let i = 0; i < Math.min(300, total); i++) included.add(allEvents[i].seq);
-
-  // 4. Last 300 events (trace exit / teardown context)
-  for (let i = Math.max(0, total - 300); i < total; i++) included.add(allEvents[i].seq);
-
-  // 5. Systematic 1-per-500 sample across the entire trace
-  const step = Math.max(1, Math.floor(total / 500));
-  for (let i = 0; i < total; i += step) included.add(allEvents[i].seq);
-
-  const bySeq = new Map(allEvents.map(e => [e.seq, e]));
-  const seqs = [...included].sort((a, b) => a - b);
-
   // ── Build the output ──────────────────────────────────
+  // Purpose: help an AI understand the schema/structure of this trace file
+  // so it can improve the parser or viewer. No individual event data needed.
   const lines = [];
-  lines.push('<?xml version="1.0" encoding="UTF-8"?>');
-  lines.push('<!--');
-  lines.push('╔══════════════════════════════════════════════════════╗');
-  lines.push('║          PEGA TRACER VIEWER — DEBUG SNAPSHOT         ║');
-  lines.push('╚══════════════════════════════════════════════════════╝');
-  lines.push('');
-  // Run sanitizer first pass over stats strings (threads, workpools, names)
-  // The sanitizer builds its token map progressively — we run it over all
-  // summary text so that tokens are pre-seeded before the XML events.
-  const cleanStr = s => sanitizer.clean(String(s || '')).text;
 
-  lines.push(`  Generated : ${new Date().toISOString()}`);
-  lines.push(`  Source    : ${cleanStr(srcFile)}`);
-  lines.push(`  Full trace: ${total.toLocaleString()} events`);
-  lines.push(`  Snapshot  : ${seqs.length.toLocaleString()} events included`);
+  lines.push('PEGA TRACER VIEWER — DEBUG SNAPSHOT');
+  lines.push(`Generated : ${new Date().toISOString()}`);
+  lines.push(`Source    : (filename redacted)`);
+  lines.push(`Total events in file: ${total.toLocaleString()}`);
   lines.push('');
 
-  // ── SECTION 1: Stats summary ────────────────────────
-  lines.push('  ┌─────────────────────────────────────────────────────┐');
-  lines.push('  │  STATISTICS SUMMARY                                  │');
-  lines.push('  └─────────────────────────────────────────────────────┘');
+  // ── SECTION 1: Stats summary (counts only, no user data) ──
+  lines.push('=== STATISTICS ===');
+  lines.push(`Failures         : ${s.fails.length}`);
+  lines.push(`Warnings         : ${s.warnings.length}`);
+  lines.push(`Exceptions       : ${s.exceptions.length}`);
+  lines.push(`Thread count     : ${s.threads.size}`);
+  lines.push(`Interaction count: ${s.interactions.size}`);
+  lines.push(`Seq range        : ${s.minSeq} – ${s.maxSeq}`);
+  lines.push(`Date range       : ${formatDateTime(s.dateRange.start)} – ${formatDateTime(s.dateRange.end)}`);
   lines.push('');
-  lines.push(`  Total events     : ${total.toLocaleString()}`);
-  lines.push(`  Failures         : ${s.fails.length}`);
-  lines.push(`  Warnings         : ${s.warnings.length}`);
-  lines.push(`  Exceptions       : ${s.exceptions.length}`);
-  lines.push(`  Threads          : ${cleanStr([...s.threads].join(', '))}`);
-  lines.push(`  Interactions     : ${s.interactions.size}`);
-  lines.push(`  Date start       : ${formatDateTime(s.dateRange.start)}`);
-  lines.push(`  Date end         : ${formatDateTime(s.dateRange.end)}`);
-  lines.push(`  Seq range        : ${s.minSeq} – ${s.maxSeq}`);
-  lines.push(`  Slowest op       : ${s.slowest.length ? formatElapsed(s.slowest[0].elapsed) + ' — ' + cleanStr(s.slowest[0].keyname || s.slowest[0].eventType) : 'N/A'}`);
-  lines.push('');
-  lines.push('  EVENT TYPE COUNTS (all events):');
+  lines.push('EVENT TYPE COUNTS:');
   for (const [et, cnt] of Object.entries(s.eventTypeCounts).sort((a,b)=>b[1]-a[1])) {
-    const bar = '█'.repeat(Math.min(30, Math.round(cnt / total * 300)));
-    lines.push(`    ${cnt.toString().padStart(7)}  ${bar}  ${et}`);
+    const pct = (cnt / total * 100).toFixed(1);
+    lines.push(`  ${cnt.toString().padStart(7)}  (${pct.padStart(5)}%)  ${et}`);
   }
   lines.push('');
 
-  // ── SECTION 2: Selection criteria ───────────────────
-  lines.push('  SNAPSHOT SELECTION CRITERIA:');
-  lines.push(`    • All failures   : ${s.fails.length} events`);
-  lines.push(`    • All exceptions : ${s.exceptions.length} events`);
-  lines.push(`    • All warnings   : ${s.warnings.length} events`);
-  lines.push(`    • Top 50 slowest ops`);
-  lines.push(`    • First 300 + Last 300 events`);
-  lines.push(`    • 1-per-${step} systematic sample (${Math.ceil(total/step)} events)`);
-  lines.push(`    • TOTAL INCLUDED : ${seqs.length.toLocaleString()} unique events`);
-  lines.push('');
+  // ── SECTION 2: Schema fingerprint ─────────────────────────
+  lines.push(debugCollector.buildSchemaReport());
 
-  // ── SECTION 3: Schema fingerprint ───────────────────
-  lines.push(sanitizer.cleanXml(debugCollector.buildSchemaReport()));
-
-  // ── SECTION 4: Per-eventType raw samples ────────────
-  lines.push(sanitizer.cleanXml(debugCollector.buildSamplesSection()));
-
-  // ── SECTION 5: Sanitization report ──────────────────
-  lines.push('  ┌─────────────────────────────────────────────────────┐');
-  lines.push('  │  SANITIZATION REPORT                                 │');
-  lines.push('  └─────────────────────────────────────────────────────┘');
-  lines.push('');
-  lines.push(sanitizer.summary());
-  lines.push('');
-
-  lines.push('-->');
-  lines.push('');
-  lines.push('<TraceEventSnapshot>');
-  lines.push('');
-
-  // ── SECTION 5: Selected events ───────────────────────
-  const escAttr = v => String(v || '')
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-
-  let prevSeq = -1;
-  for (const seq of seqs) {
-    const ev = bySeq.get(seq);
-    if (!ev) continue;
-
-    if (prevSeq !== -1 && seq > prevSeq + 1) {
-      const gap = seq - prevSeq - 1;
-      lines.push(`  <!-- ~~~ ${gap.toLocaleString()} events omitted (seq ${prevSeq+1}–${seq-1}) ~~~ -->`);
-    }
-    prevSeq = seq;
-
-    if (ev.rawXml && !ev.rawXml.endsWith('... [truncated]')) {
-      // Strip CDATA content + sanitize PII
-      const stripped = ev.rawXml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '<![CDATA[...stripped...]]>');
-      lines.push('  ' + sanitizer.cleanXml(stripped.trim()));
-    } else {
-      let xml = `  <TraceEvent`;
-      xml += ` sequence="${escAttr(ev.seq)}"`;
-      xml += ` ruleNumber="${escAttr(ev.ruleNo)}"`;
-      xml += ` stepMethod="${escAttr(ev.stepMethod)}"`;
-      xml += ` stepPage="${escAttr(ev.stepPage)}"`;
-      xml += ` step="${escAttr(ev.step)}"`;
-      xml += ` stepStatus="${escAttr(ev.stepStatus)}"`;
-      xml += ` eventType="${escAttr(ev.eventType)}"`;
-      xml += ` elapsed="${escAttr(ev.elapsed || '')}"`;
-      xml += ` name="${escAttr(cleanStr(ev.name))}"`;
-      xml += ` inskey="${escAttr(cleanStr(ev.inskey))}"`;
-      xml += ` keyname="${escAttr(cleanStr(ev.keyname))}"`;
-      xml += ` rsname="${escAttr(cleanStr(ev.rsname))}"`;
-      xml += ` rsvers="${escAttr(ev.rsvers)}"`;
-      xml += `>`;
-      if (ev.dateTime)    xml += `<DateTime>${escAttr(ev.dateTime)}</DateTime>`;
-      if (ev.interaction) xml += `<Interaction>${escAttr(ev.interaction)}</Interaction>`;
-      if (ev.threadName)  xml += `<ThreadName>${escAttr(cleanStr(ev.threadName))}</ThreadName>`;
-      if (ev.workPool)    xml += `<WorkPool>${escAttr(cleanStr(ev.workPool))}</WorkPool>`;
-      if (ev.message)     xml += `<Message>${escAttr(cleanStr(ev.message))}</Message>`;
-      xml += `</TraceEvent><!-- reconstructed — rawXml was truncated at 8KB -->`;
-      lines.push(xml);
-    }
-  }
-
-  lines.push('');
-  lines.push('</TraceEventSnapshot>');
+  // ── SECTION 3: Per-eventType structural samples ────────────
+  lines.push(debugCollector.buildSamplesSection());
 
   const content = lines.join('\n');
   const blob = new Blob([content], { type: 'application/xml;charset=utf-8' });
@@ -2026,7 +1924,7 @@ function exportDebugSnapshot() {
 
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `pega-debug-snapshot-SANITIZED-${ts}.xml`;
+  a.download = `pega-debug-snapshot-SANITIZED-${ts}.txt`;
   a.click();
   URL.revokeObjectURL(a.href);
 
