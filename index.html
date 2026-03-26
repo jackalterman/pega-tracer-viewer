@@ -249,7 +249,33 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 .detail-field .df-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
 .detail-field .df-value { color: var(--text); word-break: break-all; background: var(--bg3); border-radius: 4px; padding: 5px 8px; font-size: 11px; }
 .detail-field .df-value.mono { font-family: var(--font); }
-#detail-xml { background: var(--bg3); border-radius: 5px; padding: 10px; overflow-x: auto; font-size: 10px; color: var(--text); white-space: pre; line-height: 1.5; border: 1px solid var(--border); max-height: 300px; }
+
+/* ─── XML VIEWER ─── */
+.xml-viewer { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-top: 4px; }
+.xml-viewer-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+  background: var(--bg4); border-bottom: 1px solid var(--border);
+}
+.xml-viewer-label { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px; flex: 1; }
+.xml-copy-btn {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  padding: 2px 8px; border-radius: 3px; font-family: var(--font); font-size: 9px;
+  cursor: pointer; transition: all 0.15s; white-space: nowrap;
+}
+.xml-copy-btn:hover { border-color: var(--blue); color: var(--blue); }
+.xml-viewer-code {
+  overflow-x: auto; padding: 12px 14px; font-family: var(--font);
+  font-size: 10.5px; line-height: 1.65; white-space: pre;
+}
+/* Syntax tokens */
+.xml-punct      { color: var(--muted); }
+.xml-tag        { color: var(--blue); font-weight: 600; }
+.xml-attr-name  { color: var(--teal); }
+.xml-attr-val   { color: var(--amber); }
+.xml-attr-quote { color: var(--green); opacity: 0.75; }
+.xml-text       { color: var(--text); }
+.xml-comment    { color: var(--muted); font-style: italic; opacity: 0.7; }
+.xml-cdata      { color: var(--purple); }
 
 /* ─── EVENT TYPE COLORS ─── */
 .et-activity { color: var(--blue); }
@@ -1379,6 +1405,262 @@ function findFlameHit(mx, my) {
 }
 
 // ═══════════════════════════════════════════════════════
+//  XML FORMATTER + SYNTAX HIGHLIGHTER
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Tokenise raw XML into typed chunks respecting quoted attribute values.
+ */
+function xmlTokenize(xmlStr) {
+  const tokens = [];
+  let i = 0;
+  while (i < xmlStr.length) {
+    if (xmlStr[i] === '<') {
+      // Comment
+      if (xmlStr.startsWith('<!--', i)) {
+        const end = xmlStr.indexOf('-->', i + 4);
+        const j = end === -1 ? xmlStr.length : end + 3;
+        tokens.push({ kind: 'comment', raw: xmlStr.slice(i, j) });
+        i = j; continue;
+      }
+      // CDATA
+      if (xmlStr.startsWith('<![CDATA[', i)) {
+        const end = xmlStr.indexOf(']]>', i + 9);
+        const j = end === -1 ? xmlStr.length : end + 3;
+        tokens.push({ kind: 'cdata', raw: xmlStr.slice(i, j) });
+        i = j; continue;
+      }
+      // Declaration / PI
+      if (xmlStr.startsWith('<?', i)) {
+        const end = xmlStr.indexOf('?>', i + 2);
+        const j = end === -1 ? xmlStr.length : end + 2;
+        tokens.push({ kind: 'decl', raw: xmlStr.slice(i, j) });
+        i = j; continue;
+      }
+      // Regular tag — walk past quoted attr values
+      let j = i + 1, inQ = false, qCh = '';
+      while (j < xmlStr.length) {
+        if (inQ) {
+          if (xmlStr[j] === qCh) inQ = false;
+        } else {
+          const c = xmlStr[j];
+          if (c === '"' || c === "'") { inQ = true; qCh = c; }
+          else if (c === '>') { j++; break; }
+        }
+        j++;
+      }
+      const raw = xmlStr.slice(i, j);
+      if (raw.startsWith('</'))       tokens.push({ kind: 'close',     raw });
+      else if (raw.endsWith('/>'))    tokens.push({ kind: 'selfclose', raw });
+      else                            tokens.push({ kind: 'open',      raw });
+      i = j;
+    } else {
+      const j = xmlStr.indexOf('<', i);
+      const end = j === -1 ? xmlStr.length : j;
+      const text = xmlStr.slice(i, end).trim();
+      if (text) tokens.push({ kind: 'text', raw: text });
+      i = end;
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Collapse <Tag>text</Tag> triplets into a single inline token.
+ */
+function collapseInline(tokens) {
+  const out = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const a = tokens[i], b = tokens[i+1], c = tokens[i+2];
+    if (a && b && c && a.kind === 'open' && b.kind === 'text' && c.kind === 'close') {
+      const nameA = a.raw.match(/^<([\w:-]+)/)?.[1];
+      const nameC = c.raw.match(/^<\/([\w:-]+)>/)?.[1];
+      if (nameA && nameA === nameC) {
+        out.push({ kind: 'inline', raw: `<${nameA}>${b.raw}</${nameC}>` });
+        i += 3; continue;
+      }
+    }
+    out.push(a); i++;
+  }
+  return out;
+}
+
+/**
+ * Expand a tag's attributes onto separate lines if there are 3+ or if the tag is long.
+ * Returns one or more lines as a single newline-joined string.
+ */
+function expandTagAttrs(tagStr, pad, ind) {
+  const selfClose = tagStr.endsWith('/>');
+  const inner = selfClose ? tagStr.slice(1, -2) : tagStr.slice(1, -1);
+  const spaceIdx = inner.search(/\s/);
+  if (spaceIdx === -1) return pad + tagStr;
+
+  const tagName = inner.slice(0, spaceIdx);
+  const attrsStr = inner.slice(spaceIdx).trim();
+  const attrs = [];
+  const re = /([\w:-]+)\s*=\s*(["'][^"']*["'])/g;
+  let m;
+  while ((m = re.exec(attrsStr)) !== null) attrs.push(`${m[1]}=${m[2]}`);
+
+  if (attrs.length < 3 && tagStr.length <= 100) return pad + tagStr;
+
+  const attrPad = pad + ind;
+  const result = [`${pad}<${tagName}`];
+  for (const attr of attrs) result.push(`${attrPad}${attr}`);
+  result.push(`${pad}${selfClose ? '/>' : '>'}`);
+  return result.join('\n');
+}
+
+/**
+ * Pretty-print XML: re-indent and expand long opening tags.
+ */
+function prettyPrintXml(xmlStr) {
+  if (!xmlStr) return '';
+  const tokens = collapseInline(xmlTokenize(xmlStr));
+  const IND = '  ';
+  let depth = 0;
+  const lines = [];
+
+  for (const tok of tokens) {
+    const pad = IND.repeat(depth);
+    if (tok.kind === 'close') {
+      depth = Math.max(0, depth - 1);
+      lines.push(IND.repeat(depth) + tok.raw);
+    } else if (tok.kind === 'open') {
+      lines.push(expandTagAttrs(tok.raw, pad, IND));
+      depth++;
+    } else if (tok.kind === 'selfclose') {
+      lines.push(expandTagAttrs(tok.raw, pad, IND));
+    } else {
+      lines.push(pad + tok.raw);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Colour a sequence of inline attributes: attr="value" ...
+ */
+function colorInlineAttrs(attrStr) {
+  let out = '', last = 0;
+  const re = /(\s+)([\w:-]+)(=)(["'])([^"']*)(["'])/g;
+  let m;
+  while ((m = re.exec(attrStr)) !== null) {
+    out += escHtml(attrStr.slice(last, m.index));
+    out += escHtml(m[1]); // whitespace
+    out += `<span class="xml-attr-name">${escHtml(m[2])}</span>`;
+    out += `<span class="xml-punct">${escHtml(m[3])}</span>`;
+    out += `<span class="xml-attr-quote">${escHtml(m[4])}</span>`;
+    out += `<span class="xml-attr-val">${escHtml(m[5])}</span>`;
+    out += `<span class="xml-attr-quote">${escHtml(m[6])}</span>`;
+    last = m.index + m[0].length;
+  }
+  out += escHtml(attrStr.slice(last));
+  return out;
+}
+
+/**
+ * Apply syntax highlighting to a single line of pretty-printed XML.
+ */
+function hlXmlLine(line) {
+  const t = line.trimStart();
+  const sp = escHtml(line.slice(0, line.length - t.length));
+
+  // Comment
+  if (t.startsWith('<!--'))
+    return sp + `<span class="xml-comment">${escHtml(t)}</span>`;
+
+  // CDATA
+  if (t.startsWith('<![CDATA[') || t.startsWith(']]>'))
+    return sp + `<span class="xml-cdata">${escHtml(t)}</span>`;
+
+  // Standalone closing bracket: > or />
+  if (t === '>' || t === '/>')
+    return sp + `<span class="xml-punct">${escHtml(t)}</span>`;
+
+  // Closing tag: </TagName>
+  const cm = t.match(/^<\/([\w:-]+)>(.*)/);
+  if (cm)
+    return sp +
+      `<span class="xml-punct">&lt;/</span>` +
+      `<span class="xml-tag">${escHtml(cm[1])}</span>` +
+      `<span class="xml-punct">&gt;</span>` +
+      escHtml(cm[2]);
+
+  // Inline tag: <Tag>text</Tag>
+  const im = t.match(/^<([\w:-]+)>(.*?)<\/([\w:-]+)>(.*)$/);
+  if (im && im[1] === im[3])
+    return sp +
+      `<span class="xml-punct">&lt;</span><span class="xml-tag">${escHtml(im[1])}</span><span class="xml-punct">&gt;</span>` +
+      `<span class="xml-text">${escHtml(im[2])}</span>` +
+      `<span class="xml-punct">&lt;/</span><span class="xml-tag">${escHtml(im[3])}</span><span class="xml-punct">&gt;</span>` +
+      escHtml(im[4]);
+
+  // Opening tag (possibly with inline attrs): <TagName ...> or <TagName
+  const om = t.match(/^<([\w:-]+)([\s\S]*)$/);
+  if (om) {
+    const rest = om[2]; // everything after tag name
+    // Check for self-close or closing >
+    const trailMatch = rest.match(/^([\s\S]*?)(\s*\/?>)$/);
+    if (trailMatch) {
+      return sp +
+        `<span class="xml-punct">&lt;</span>` +
+        `<span class="xml-tag">${escHtml(om[1])}</span>` +
+        colorInlineAttrs(trailMatch[1]) +
+        `<span class="xml-punct">${escHtml(trailMatch[2])}</span>`;
+    }
+    return sp +
+      `<span class="xml-punct">&lt;</span>` +
+      `<span class="xml-tag">${escHtml(om[1])}</span>` +
+      colorInlineAttrs(rest);
+  }
+
+  // Attribute-only line (from expanded multi-line tag): attrName="value"
+  const am = t.match(/^([\w:-]+)(=)(["'])([\s\S]*)(["'])$/);
+  if (am)
+    return sp +
+      `<span class="xml-attr-name">${escHtml(am[1])}</span>` +
+      `<span class="xml-punct">${escHtml(am[2])}</span>` +
+      `<span class="xml-attr-quote">${escHtml(am[3])}</span>` +
+      `<span class="xml-attr-val">${escHtml(am[4])}</span>` +
+      `<span class="xml-attr-quote">${escHtml(am[5])}</span>`;
+
+  // Plain text / truncation notice
+  return sp + `<span class="xml-text">${escHtml(t)}</span>`;
+}
+
+/**
+ * Full syntax-highlight pass over pretty-printed XML.
+ */
+function syntaxHighlightXml(xmlStr) {
+  return xmlStr.split('\n').map(hlXmlLine).join('\n');
+}
+
+/**
+ * Copy the pretty-printed XML to clipboard.
+ */
+function copyXmlToClipboard(seq, btn) {
+  const ev = state.events.find(e => e.seq === seq);
+  if (!ev || !ev.rawXml) return;
+  const pretty = prettyPrintXml(ev.rawXml);
+  navigator.clipboard.writeText(pretty).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied!';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.style.borderColor = ''; }, 1600);
+  }).catch(() => {
+    // Fallback: select the code block text
+    const code = btn.closest('.xml-viewer')?.querySelector('.xml-viewer-code');
+    if (code) {
+      const r = document.createRange(); r.selectNodeContents(code);
+      window.getSelection().removeAllRanges(); window.getSelection().addRange(r);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════
 //  EVENT DETAIL
 // ═══════════════════════════════════════════════════════
 function showEventDetail(seq) {
@@ -1421,9 +1703,16 @@ function showEventDetail(seq) {
   }
 
   if (ev.rawXml) {
+    const prettyXml  = prettyPrintXml(ev.rawXml);
+    const highlighted = syntaxHighlightXml(prettyXml);
     html += `<div class="detail-field">
-      <div class="df-label">Raw XML</div>
-      <pre id="detail-xml">${escHtml(ev.rawXml)}</pre>
+      <div class="xml-viewer">
+        <div class="xml-viewer-toolbar">
+          <span class="xml-viewer-label">Raw XML</span>
+          <button class="xml-copy-btn" onclick="copyXmlToClipboard(${ev.seq}, this)">⎘ Copy</button>
+        </div>
+        <div class="xml-viewer-code">${highlighted}</div>
+      </div>
     </div>`;
   }
 
