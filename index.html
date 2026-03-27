@@ -186,7 +186,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 #table-header {
   display: grid; background: var(--bg2); border-bottom: 2px solid var(--border);
   padding: 0 8px; position: sticky; top: 0; z-index: 5;
-  grid-template-columns: 70px 170px 160px 1fr 80px 80px 80px 110px;
+  grid-template-columns: 30px 70px 170px 160px 1fr 80px 80px 80px 110px;
 }
 .th { padding: 8px 6px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; cursor: pointer; user-select: none; }
 .th:hover { color: var(--text); }
@@ -200,7 +200,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 .trow {
   display: grid; padding: 0 8px; border-bottom: 1px solid rgba(38,48,68,0.6);
   cursor: pointer; transition: background 0.08s;
-  grid-template-columns: 70px 170px 160px 1fr 80px 80px 80px 110px;
+  grid-template-columns: 30px 70px 170px 160px 1fr 80px 80px 80px 110px;
   align-items: center;
 }
 .trow:hover { background: var(--bg3); }
@@ -384,6 +384,55 @@ mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius:
 .empty-msg { text-align: center; color: var(--muted); padding: 40px; font-size: 12px; }
 .loading-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── BOOKMARKS ─── */
+.bm-star {
+  background: none; border: none; cursor: pointer; font-size: 13px; line-height: 1;
+  padding: 0 4px; flex-shrink: 0; opacity: 0.22; transition: opacity 0.12s, color 0.12s;
+  color: var(--muted); display: flex; align-items: center; justify-content: center;
+}
+.bm-star:hover { opacity: 1; color: var(--amber); }
+.bm-star.active { opacity: 1; color: var(--amber); }
+.trow.bookmarked { background: rgba(249,226,175,0.04); }
+.trow.bookmarked .td.bm-cell { color: var(--amber); opacity: 1; }
+
+#panel-bookmarks { padding: 0 !important; overflow: hidden !important; }
+#panel-bookmarks.active { display: flex !important; flex-direction: column; }
+#bm-header {
+  padding: 8px 14px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+}
+#bm-count { color: var(--amber); font-size: 11px; font-weight: 600; }
+#bm-clear-all {
+  margin-left: auto; background: none; border: 1px solid var(--border);
+  color: var(--muted); padding: 2px 8px; border-radius: 3px; font-family: var(--font);
+  font-size: 9px; cursor: pointer; transition: all 0.15s;
+}
+#bm-clear-all:hover { border-color: var(--red); color: var(--red); }
+#bm-scroller { flex: 1; overflow-y: auto; }
+.bm-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; border-bottom: 1px solid rgba(38,48,68,.5);
+  cursor: pointer; background: var(--bg); transition: background .08s; height: 36px;
+}
+.bm-row:hover { background: var(--bg3); }
+.bm-row .bm-star { opacity: 1; font-size: 14px; }
+.bm-seq { color: var(--muted); font-size: 10px; min-width: 46px; flex-shrink: 0; }
+.bm-type { font-size: 10px; min-width: 130px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.bm-elapsed { color: var(--cyan); font-size: 10px; flex-shrink: 0; }
+.bm-status { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+.bm-status.fail { background: rgba(243,139,168,.15); color: var(--red); }
+.bm-status.warn { background: rgba(249,226,175,.15); color: var(--amber); }
+.bm-empty { text-align: center; color: var(--muted); padding: 50px 20px; font-size: 11px; line-height: 2.2; }
+
+#detail-bm-btn {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 1px 6px; border-radius: 3px;
+  flex-shrink: 0; transition: all 0.15s;
+}
+#detail-bm-btn:hover { border-color: var(--amber); color: var(--amber); }
+#detail-bm-btn.active { border-color: var(--amber); color: var(--amber); background: rgba(249,226,175,0.1); }
 </style>
 </head>
 <body>
@@ -417,6 +466,7 @@ mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius:
     <div class="tab" data-tab="tree">Tree</div>
     <div class="tab" data-tab="table">Table</div>
     <div class="tab" data-tab="flame">Flamegraph</div>
+    <div class="tab" data-tab="bookmarks" id="bookmarks-tab">★ Bookmarks</div>
     <div class="tab" data-tab="search" id="search-tab" style="display:none">Search</div>
   </div>
 
@@ -471,6 +521,7 @@ mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius:
           <span class="gsb-clear" onclick="clearGlobalSearch()">✕ clear</span>
         </div>
         <div id="table-header">
+          <div class="th" style="padding:6px 4px;cursor:default;" title="Bookmark">★</div>
           <div class="th sorted" data-col="seq" onclick="sortTable('seq')">SEQ</div>
           <div class="th" data-col="dateTime" onclick="sortTable('dateTime')">DATETIME</div>
           <div class="th" data-col="eventType" onclick="sortTable('eventType')">EVENT TYPE</div>
@@ -521,6 +572,16 @@ mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius:
       </div>
       <div id="sr-scroller"></div>
     </div>
+    <!-- BOOKMARKS -->
+    <div class="panel" id="panel-bookmarks">
+      <div id="bm-header">
+        <span id="bm-count">0 bookmarks</span>
+        <button id="bm-clear-all" onclick="clearAllBookmarks()">Clear all</button>
+      </div>
+      <div id="bm-scroller">
+        <div class="bm-empty">No bookmarks yet.<br>Click the ★ star on any event to bookmark it.</div>
+      </div>
+    </div>
   </div>
 </div>
 <div id="resize-handle"></div>
@@ -528,6 +589,7 @@ mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius:
 <div id="detail-panel">
   <div id="detail-header">
     <h3 id="detail-title">Event Detail</h3>
+    <button id="detail-bm-btn" title="Toggle bookmark" onclick="toggleBookmark(state.selectedEventSeq, event)">☆</button>
     <button id="detail-close" title="Clear selection" onclick="closeDetail()">✕</button>
   </div>
   <div id="detail-body">
@@ -562,6 +624,8 @@ const state = {
   flamePan: 0,
   flameNodes: [],   // flat list of flame rects
   flameDragStart: null,
+  bookmarks: new Map(),   // seq → {seq, addedAt}
+  currentFileName: '',    // used as localStorage key for bookmarks
 };
 
 const ROW_HEIGHT = 32;
@@ -1062,6 +1126,9 @@ function renderTreeNode(node) {
 
   const childCount = hasChildren ? `<span style="color:var(--muted);font-size:9px;margin-right:6px;">(${node.children.length})</span>` : '';
 
+  const tnStarCls = state.bookmarks.has(node.seq) ? 'bm-star active' : 'bm-star';
+  const tnStarIcon = state.bookmarks.has(node.seq) ? '★' : '☆';
+
   return `<div class="${rowClass}" style="height:28px;padding-left:${indent}px;" 
       onclick="treeNodeClick(${node.seq}, ${hasChildren})"
       data-seq="${node.seq}">
@@ -1073,6 +1140,7 @@ function renderTreeNode(node) {
     ${childCount}
     ${statusHtml}
     ${elapsedHtml}
+    <button class="${tnStarCls}" onclick="toggleBookmark(${node.seq}, event)" title="Toggle bookmark" style="margin-left:4px;margin-right:4px;">${tnStarIcon}</button>
   </div>`;
 }
 
@@ -1200,15 +1268,19 @@ function renderVisibleRows() {
     const st = ev.stepStatus;
     const rowClass = st === 'Fail' ? 'trow fail' : (st === 'Warning' || st === 'Warn') ? 'trow warning' : ((ev.eventType||'').toLowerCase().includes('exception') ? 'trow exception' : 'trow');
     const selected = ev.seq === state.selectedEventSeq ? ' selected' : '';
+    const bookmarked = state.bookmarks.has(ev.seq) ? ' bookmarked' : '';
     const etClass = getEventTypeClass(ev.eventType);
-    html += `<div class="${rowClass}${selected}" style="position:absolute;top:${y}px;left:0;right:0;height:${ROW_HEIGHT}px;" onclick="showEventDetail(${ev.seq})">
+    const starCls = state.bookmarks.has(ev.seq) ? 'bm-star active' : 'bm-star';
+    const starIcon = state.bookmarks.has(ev.seq) ? '★' : '☆';
+    html += `<div class="${rowClass}${selected}${bookmarked}" style="position:absolute;top:${y}px;left:0;right:0;height:${ROW_HEIGHT}px;" onclick="showEventDetail(${ev.seq})">
+      <button class="${starCls}" onclick="toggleBookmark(${ev.seq}, event)" title="Toggle bookmark">${starIcon}</button>
       <div class="td seq">${ev.seq}</div>
       <div class="td" style="font-size:10px;color:var(--muted);">${formatDateTime(ev.dateTime)}</div>
       <div class="td ${etClass}">${escHtml(ev.eventType||'')}</div>
       <div class="td" title="${escHtml(ev.keyname||ev.name||'')}">${escHtml((ev.keyname||ev.name||'').slice(0,80))}</div>
       <div class="td">${escHtml(ev.step||'')}</div>
       <div class="td elapsed">${formatElapsed(ev.elapsed)}</div>
-      <div class="td ${st==='Fail'?'status-fail':(st==='Warning'?'status-warn':'')}">${escHtml(st||'')}</div>
+      <div class="td ${st==='Fail'?'status-fail':(st==='Warning'?'status-warn':'')} ">${escHtml(st||'')}</div>
       <div class="td" style="color:var(--muted);">${escHtml(ev.threadName||'')}</div>
     </div>`;
   }
@@ -1735,6 +1807,15 @@ function showEventDetail(seq) {
   }
 
   body.innerHTML = html;
+
+  // Sync the bookmark button in the detail header
+  const bmBtn = document.getElementById('detail-bm-btn');
+  if (bmBtn) {
+    const isBm = state.bookmarks.has(seq);
+    bmBtn.textContent = isBm ? '★' : '☆';
+    bmBtn.classList.toggle('active', isBm);
+    bmBtn.title = isBm ? 'Remove bookmark' : 'Add bookmark';
+  }
 }
 
 function closeDetail() {
@@ -1792,6 +1873,126 @@ function initResizeHandle() {
 }
 
 // ═══════════════════════════════════════════════════════
+//  BOOKMARKS
+//  Persisted per-filename in localStorage.
+// ═══════════════════════════════════════════════════════
+const BM_KEY_PREFIX = 'pega-bm-';
+
+function bmStorageKey() {
+  return BM_KEY_PREFIX + (state.currentFileName || '_default');
+}
+
+function loadBookmarks(filename) {
+  state.currentFileName = filename || '';
+  state.bookmarks = new Map();
+  try {
+    const raw = localStorage.getItem(BM_KEY_PREFIX + state.currentFileName);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      for (const item of arr) state.bookmarks.set(item.seq, item);
+    }
+  } catch(e) { state.bookmarks = new Map(); }
+  updateBookmarkBadge();
+}
+
+function saveBookmarks() {
+  try {
+    localStorage.setItem(bmStorageKey(), JSON.stringify([...state.bookmarks.values()]));
+  } catch(e) {}
+}
+
+function toggleBookmark(seq, e) {
+  if (e) e.stopPropagation();
+  if (!seq || seq < 0) return;
+  const ev = state.events.find(ev => ev.seq === seq);
+  if (!ev) return;
+
+  if (state.bookmarks.has(seq)) {
+    state.bookmarks.delete(seq);
+  } else {
+    state.bookmarks.set(seq, { seq, addedAt: Date.now() });
+  }
+  saveBookmarks();
+  updateBookmarkBadge();
+
+  // Sync the detail header star if this is the currently shown event
+  if (state.selectedEventSeq === seq) {
+    const bmBtn = document.getElementById('detail-bm-btn');
+    if (bmBtn) {
+      const isBm = state.bookmarks.has(seq);
+      bmBtn.textContent = isBm ? '★' : '☆';
+      bmBtn.classList.toggle('active', isBm);
+      bmBtn.title = isBm ? 'Remove bookmark' : 'Add bookmark';
+    }
+  }
+
+  // Refresh whichever view is active
+  if (state.currentTab === 'table')     renderVisibleRows();
+  if (state.currentTab === 'tree')      renderTree();
+  if (state.currentTab === 'bookmarks') renderBookmarksPanel();
+}
+
+function clearAllBookmarks() {
+  state.bookmarks.clear();
+  saveBookmarks();
+  updateBookmarkBadge();
+  renderBookmarksPanel();
+  if (state.currentTab === 'table') renderVisibleRows();
+  if (state.currentTab === 'tree')  renderTree();
+  const bmBtn = document.getElementById('detail-bm-btn');
+  if (bmBtn) { bmBtn.textContent = '☆'; bmBtn.classList.remove('active'); bmBtn.title = 'Add bookmark'; }
+}
+
+function updateBookmarkBadge() {
+  const tab = document.getElementById('bookmarks-tab');
+  if (!tab) return;
+  const count = state.bookmarks.size;
+  let badge = tab.querySelector('.tab-badge');
+  if (count > 0) {
+    if (!badge) { badge = document.createElement('span'); badge.className = 'tab-badge warn'; tab.appendChild(badge); }
+    badge.textContent = count;
+  } else {
+    if (badge) badge.remove();
+  }
+  const countEl = document.getElementById('bm-count');
+  if (countEl) countEl.textContent = `${count} bookmark${count !== 1 ? 's' : ''}`;
+}
+
+function renderBookmarksPanel() {
+  const scroller = document.getElementById('bm-scroller');
+  if (!scroller) return;
+  updateBookmarkBadge();
+
+  if (state.bookmarks.size === 0) {
+    scroller.innerHTML = '<div class="bm-empty">No bookmarks yet.<br>Click the ★ star on any event<br>in the Table or Tree view to flag it.</div>';
+    return;
+  }
+
+  // Sort by ascending seq so they appear in trace order
+  const bms = [...state.bookmarks.values()].sort((a, b) => a.seq - b.seq);
+  let html = '';
+  for (const bm of bms) {
+    const ev = state.events.find(e => e.seq === bm.seq);
+    if (!ev) continue;
+    const etClass = getEventTypeClass(ev.eventType);
+    const displayName = ev.keyname || ev.name || '';
+    const st = ev.stepStatus;
+    const statusHtml = st
+      ? `<span class="bm-status ${st.toLowerCase() === 'fail' ? 'fail' : 'warn'}">${escHtml(st)}</span>`
+      : '';
+    html += `<div class="bm-row" onclick="showEventDetail(${ev.seq})">
+      <button class="bm-star active" onclick="toggleBookmark(${ev.seq}, event)" title="Remove bookmark">★</button>
+      <span class="bm-seq">#${ev.seq}</span>
+      <span class="bm-type ${etClass}">${escHtml(ev.eventType || '')}</span>
+      <span class="bm-name" title="${escHtml(displayName)}">${escHtml(displayName.slice(0, 70))}</span>
+      ${statusHtml}
+      <span class="bm-elapsed">${formatElapsed(ev.elapsed)}</span>
+    </div>`;
+  }
+  scroller.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════
 //  TAB SWITCHING
 // ═══════════════════════════════════════════════════════
 function switchTab(name) {
@@ -1804,6 +2005,7 @@ function switchTab(name) {
 
   if (name === 'flame') setTimeout(drawFlamegraph, 50);
   if (name === 'tree') renderTree();
+  if (name === 'bookmarks') renderBookmarksPanel();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1830,6 +2032,7 @@ function loadFile(file) {
   document.getElementById('debug-export-btn').disabled = true;
   debugCollector.reset();
   sanitizer.reset();
+  loadBookmarks(file.name);
 
   // Show progress
   const progressArea = document.getElementById('progress-area');
@@ -1883,7 +2086,8 @@ function loadFile(file) {
 function updateTabBadges() {
   const s = state.stats;
   document.querySelectorAll('.tab').forEach(t => {
-    // remove old badges
+    // skip the bookmarks tab — it manages its own badge
+    if (t.id === 'bookmarks-tab') return;
     const old = t.querySelector('.tab-badge');
     if (old) old.remove();
   });
