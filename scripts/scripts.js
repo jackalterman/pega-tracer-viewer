@@ -22,6 +22,10 @@ const state = {
   flameDragStart: null,
   bookmarks: new Map(),   // seq → {seq, addedAt}
   currentFileName: '',    // used as localStorage key for bookmarks
+  analyticsData: [],
+  analyticsSortCol: 'selfTime',
+  analyticsSortDir: 'desc',
+  flameMode: 'seq',  // 'seq' | 'self'
 };
 
 const ROW_HEIGHT = 32;
@@ -274,7 +278,42 @@ function buildTree(events) {
     }
   }
 
+  // Second pass: calculate ownDuration (Self Time)
+  function calcSelf(nodes) {
+    for (const node of nodes) {
+      let childSum = 0;
+      if (node.children && node.children.length > 0) {
+        calcSelf(node.children);
+        for (const c of node.children) {
+          childSum += c.totalElapsed || 0;
+        }
+      }
+      node.ownDuration = Math.max(0, (node.totalElapsed || 0) - childSum);
+    }
+  }
+  calcSelf(roots);
+
   return roots;
+}
+
+// ═══════════════════════════════════════════════════════
+//  OWN DURATION PROPAGATION
+// ═══════════════════════════════════════════════════════
+// Copy ownDuration (and totalElapsed) from tree nodes back onto the flat
+// events array so the Summary, Table etc. can access it.
+function propagateOwnDuration(roots, events) {
+  const seqMap = new Map(events.map(e => [e.seq, e]));
+  function walk(nodes) {
+    for (const n of nodes) {
+      const ev = seqMap.get(n.seq);
+      if (ev) {
+        ev.ownDuration = n.ownDuration || 0;
+        ev.totalElapsed = n.totalElapsed || ev.elapsed;
+      }
+      if (n.children) walk(n.children);
+    }
+  }
+  walk(roots);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -302,7 +341,7 @@ function buildStats(events) {
     const et = (ev.eventType||'').toLowerCase();
     if (et.includes('exception')) s.exceptions.push(ev);
 
-    if (ev.elapsed > 0) s.slowest.push(ev);
+    if (ev.ownDuration > 0 || ev.elapsed > 0) s.slowest.push(ev);
 
     s.eventTypeCounts[ev.eventType] = (s.eventTypeCounts[ev.eventType] || 0) + 1;
     if (ev.threadName) s.threads.add(ev.threadName);
@@ -311,7 +350,7 @@ function buildStats(events) {
     if (ev.seq > s.maxSeq) { s.maxSeq = ev.seq; s.dateRange.end = ev.dateTime; }
   }
 
-  s.slowest.sort((a,b) => b.elapsed - a.elapsed);
+  s.slowest.sort((a,b) => (b.ownDuration || 0) - (a.ownDuration || 0));
   s.slowest = s.slowest.slice(0, 20);
 
   return s;
@@ -371,7 +410,7 @@ function renderSummary() {
   }
 
   if (s.slowest.length) {
-    html += '<div class="sum-section"><h3>🐌 Top Slowest Operations (by elapsed)</h3><div class="event-list">';
+    html += '<div class="sum-section"><h3>🐌 Top Slowest Operations (by Self Time)</h3><div class="event-list">';
     for (const ev of s.slowest.slice(0, 15)) html += eventRow(ev, '');
     html += '</div></div>';
   }
@@ -410,18 +449,102 @@ function eventRow(ev, type) {
   const displayName = ev.keyname || ev.name || '';
   const statusBadge = ev.stepStatus ? `<span class="er-status ${ev.stepStatus.toLowerCase()}">${ev.stepStatus}</span>` : '';
   const etClass = getEventTypeClass(ev.eventType);
+  const selfHtml = ev.ownDuration > 0
+    ? `<span class="er-elapsed" style="color:var(--teal);" title="Self Time">${formatElapsed(ev.ownDuration)}</span>`
+    : '';
   return `<div class="event-row ${type}" onclick="showEventDetail(${ev.seq})">
     <span class="er-seq">#${ev.seq}</span>
     <span class="er-type ${etClass}">${escHtml(ev.eventType||'')}</span>
     <span class="er-name" title="${escHtml(displayName)}">${escHtml(displayName.slice(0,80))}</span>
     ${statusBadge}
-    <span class="er-elapsed">${formatElapsed(ev.elapsed)}</span>
+    ${selfHtml}
+    <span class="er-elapsed" title="Total Elapsed">${formatElapsed(ev.elapsed)}</span>
   </div>`;
 }
 
 // ═══════════════════════════════════════════════════════
-//  TREE RENDER
+//  RULE ANALYTICS
 // ═══════════════════════════════════════════════════════
+function buildAnalytics(events) {
+  const map = new Map(); // key -> {ruleName, eventType, hits, totalTime, selfTime, maxTime}
+
+  function walk(nodes) {
+    for (const n of nodes) {
+      const name = n.keyname || n.name || '(unknown)';
+      const type = n.eventType || '';
+      const key = name + '|' + type;
+
+      if (!map.has(key)) {
+        map.set(key, { ruleName: name, eventType: type, hits: 0, totalTime: 0, selfTime: 0, maxTime: 0 });
+      }
+      const entry = map.get(key);
+      entry.hits++;
+      entry.totalTime += (n.totalElapsed || 0);
+      entry.selfTime += (n.ownDuration || 0);
+      if ((n.totalElapsed || 0) > entry.maxTime) entry.maxTime = n.totalElapsed;
+
+      if (n.children) walk(n.children);
+    }
+  }
+  walk(state.treeRoots);
+
+  const data = [...map.values()];
+  data.forEach(d => { d.avgTime = d.totalTime / d.hits; });
+  return data;
+}
+
+function renderAnalytics() {
+  const panel = document.getElementById('panel-analytics');
+  if (!state.analyticsData || !state.analyticsData.length) {
+    panel.innerHTML = '<div class="empty-msg">No analytics data. Load a tracer file first.</div>';
+    return;
+  }
+
+  const rowsEl = document.getElementById('analytics-rows');
+  const countEl = document.getElementById('analytics-count');
+  countEl.textContent = `${state.analyticsData.length} unique rules/steps`;
+
+  let html = '';
+  for (const d of state.analyticsData) {
+    html += `<div class="arow">
+      <div class="atd self">${formatElapsed(d.selfTime)}</div>
+      <div class="atd time">${formatElapsed(d.totalTime)}</div>
+      <div class="atd">${d.hits.toLocaleString()}</div>
+      <div class="atd mono">${formatElapsed(d.avgTime)}</div>
+      <div class="atd bold" title="${escHtml(d.ruleName)}">${escHtml(d.ruleName)}</div>
+      <div class="atd ${getEventTypeClass(d.eventType)}">${escHtml(d.eventType)}</div>
+    </div>`;
+  }
+  rowsEl.innerHTML = html;
+}
+
+function sortAnalytics(col) {
+  if (state.analyticsSortCol === col) {
+    state.analyticsSortDir = state.analyticsSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.analyticsSortCol = col;
+    state.analyticsSortDir = (col === 'ruleName' || col === 'eventType') ? 'asc' : 'desc';
+  }
+
+  document.querySelectorAll('.ah').forEach(ah => {
+    ah.classList.remove('sorted', 'asc', 'desc');
+    if (ah.dataset.col === col) {
+      ah.classList.add('sorted', state.analyticsSortDir);
+    }
+  });
+
+  const dir = state.analyticsSortDir === 'asc' ? 1 : -1;
+  state.analyticsData.sort((a,b) => {
+    let av = a[col], bv = b[col];
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  });
+  renderAnalytics();
+}
+
+// ═══════════════════════════════════════════════════════
+//  TREE RENDER
 function renderTree() {
   const body = document.getElementById('tree-body');
   if (!state.treeRoots.length) {
@@ -488,7 +611,7 @@ function renderTreeNode(node) {
     : '';
 
   const elapsedHtml = node.totalElapsed
-    ? `<span class="tn-elapsed">${formatElapsed(node.totalElapsed)}</span>`
+    ? `<span class="tn-elapsed" title="Total: ${formatElapsed(node.totalElapsed)} | Self: ${formatElapsed(node.ownDuration)}">${formatElapsed(node.totalElapsed)}<br><small style="opacity:0.6;font-size:8px;">self: ${formatElapsed(node.ownDuration)}</small></span>`
     : '';
 
   const childCount = hasChildren ? `<span style="color:var(--muted);font-size:9px;margin-right:6px;">(${node.children.length})</span>` : '';
@@ -647,6 +770,7 @@ function renderVisibleRows() {
       <div class="td" title="${escHtml(ev.keyname||ev.name||'')}">${escHtml((ev.keyname||ev.name||'').slice(0,80))}</div>
       <div class="td">${escHtml(ev.step||'')}</div>
       <div class="td elapsed">${formatElapsed(ev.elapsed)}</div>
+      <div class="td" style="color:var(--teal);">${formatElapsed(ev.ownDuration)}</div>
       <div class="td ${st==='Fail'?'status-fail':(st==='Warning'?'status-warn':'')} ">${escHtml(st||'')}</div>
       <div class="td" style="color:var(--muted);">${escHtml(ev.threadName||'')}</div>
     </div>`;
@@ -676,6 +800,7 @@ function buildFlameNodes(roots) {
       eventType: node.eventType,
       keyname: node.keyname || node.name || '',
       elapsed: node.totalElapsed || node.elapsed,
+      ownDuration: node.ownDuration || 0,
       stepStatus: node.stepStatus,
       color: getEventColor(node.eventType),
     });
@@ -685,7 +810,18 @@ function buildFlameNodes(roots) {
   return nodes;
 }
 
+function toggleFlameMode() {
+  state.flameMode = state.flameMode === 'seq' ? 'self' : 'seq';
+  const btn = document.getElementById('flame-mode-btn');
+  if (btn) {
+    btn.classList.toggle('active', state.flameMode === 'self');
+  }
+  state.flameZoom = { start: 0, end: 1 };
+  drawFlamegraph();
+}
+
 function drawFlamegraph() {
+  if (state.flameMode === 'self') { drawFlameSelf(); return; }
   const canvas = document.getElementById('flame-canvas');
   const body = document.getElementById('flame-body');
   if (!state.flameNodes.length) {
@@ -756,6 +892,98 @@ function drawFlamegraph() {
   document.getElementById('flame-info').textContent = `${drawn.toLocaleString()} frames rendered | depth: ${maxDepth}`;
 }
 
+// ─── SELF TIME FLAMEGRAPH ───
+// Each bar's width is proportional to ownDuration; bars at the same depth
+// are packed left-to-right in their tree order. This gives a true "how much
+// CPU did I own?" picture independent of sequence numbering.
+let flameSelfRects = []; // [{seq, x, w, y, n}] for hit-test
+
+function drawFlameSelf() {
+  const canvas = document.getElementById('flame-canvas');
+  const body = document.getElementById('flame-body');
+  if (!state.flameNodes.length) {
+    if (flameCtx) flameCtx.clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+
+  // Build a per-depth layout
+  // Walk the tree in original order, accumulate x offsets per depth
+  const nodes = state.flameNodes;
+  const totalSelf = nodes.reduce((s, n) => s + n.ownDuration, 0) || 1;
+  const maxDepth = Math.max(...nodes.map(n => n.depth));
+
+  const W = body.clientWidth;
+  const H = Math.max(body.clientHeight, (maxDepth + 2) * (BAR_H + FLAME_PAD) + 20);
+  canvas.width = W; canvas.height = H;
+  flameCtx = canvas.getContext('2d');
+  const ctx = flameCtx;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0e14';
+  ctx.fillRect(0, 0, W, H);
+
+  // Zoom
+  const z = state.flameZoom;
+  const totalMs = totalSelf;
+  const visStart = z.start * totalMs;
+  const visEnd = z.end * totalMs;
+  const visRange = Math.max(0.001, visEnd - visStart);
+
+  // Per-depth running x cursor (in ms units, then projected to pixels)
+  const cursorMs = {};
+
+  flameSelfRects = [];
+  let drawn = 0;
+
+  // Walk in tree order (nodes were built depth-first, so parent before children)
+  // We want: parent's x = sum of siblings before it at same depth slot
+  // Simplest approach: assign each node an x = cursor[depth], w = ownDuration
+  for (const n of nodes) {
+    const d = n.depth;
+    if (cursorMs[d] === undefined) cursorMs[d] = 0;
+
+    const msStart = cursorMs[d];
+    const msW = n.ownDuration || 0;
+    cursorMs[d] += msW;
+
+    // Only draw if has any self time
+    if (msW < 0.01) continue;
+
+    const x1 = Math.max(0, (msStart - visStart) / visRange * W);
+    const x2 = Math.min(W, (msStart + msW - visStart) / visRange * W);
+    const w = x2 - x1;
+    if (w < 0.3 || x2 < 0 || x1 > W) continue;
+
+    const y = d * (BAR_H + FLAME_PAD) + 10;
+
+    let color = n.color;
+    if (n.stepStatus === 'Fail') color = '#f38ba8';
+    else if (n.stepStatus === 'Warning') color = '#f9e2af';
+
+    ctx.fillStyle = color;
+    ctx.globalAlpha = w < 2 ? 0.5 : 0.85;
+    ctx.fillRect(x1, y, w - 1, BAR_H);
+
+    if (w > 30) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#0a0e14';
+      ctx.font = '10px JetBrains Mono, monospace';
+      const label = (n.keyname || n.eventType || '') + ' (' + formatElapsed(n.ownDuration) + ')';
+      ctx.save();
+      ctx.rect(x1 + 2, y, Math.max(0, w - 4), BAR_H);
+      ctx.clip();
+      ctx.fillText(label, x1 + 3, y + 14);
+      ctx.restore();
+    }
+
+    flameSelfRects.push({ seq: n.seq, x: x1, w, y, n });
+    drawn++;
+  }
+  ctx.globalAlpha = 1;
+  flameMeta = { minSeq: 0, seqRange: 0, W, H, maxDepth, mode: 'self' };
+  document.getElementById('flame-info').textContent =
+    `${drawn.toLocaleString()} frames (self-time) | total self: ${formatElapsed(totalSelf)} | depth: ${maxDepth}`;
+}
+
 function flameZoomIn() {
   const mid = (state.flameZoom.start + state.flameZoom.end) / 2;
   const half = (state.flameZoom.end - state.flameZoom.start) / 4;
@@ -784,7 +1012,10 @@ function initFlameEvents() {
     if (hit) {
       document.getElementById('ft-type').textContent = hit.eventType || '';
       document.getElementById('ft-name').textContent = hit.keyname || '';
-      document.getElementById('ft-elapsed').textContent = hit.elapsed ? `Elapsed: ${formatElapsed(hit.elapsed)}` : '';
+      const elapsedLabel = state.flameMode === 'self'
+        ? `Self: ${formatElapsed(hit.ownDuration)} | Total: ${formatElapsed(hit.elapsed)}`
+        : (hit.elapsed ? `Elapsed: ${formatElapsed(hit.elapsed)}` : '');
+      document.getElementById('ft-elapsed').textContent = elapsedLabel;
       tooltip.style.display = 'block';
       tooltip.style.left = (e.clientX + 12) + 'px';
       tooltip.style.top = (e.clientY - 10) + 'px';
@@ -841,6 +1072,18 @@ function initFlameEvents() {
 
 function findFlameHit(mx, my) {
   if (!flameMeta.W) return null;
+
+  if (state.flameMode === 'self') {
+    // In self-time mode, hit-test against the flameSelfRects list
+    const depth = Math.floor((my - 10) / (BAR_H + FLAME_PAD));
+    for (let i = flameSelfRects.length - 1; i >= 0; i--) {
+      const r = flameSelfRects[i];
+      if (r.n.depth === depth && mx >= r.x && mx <= r.x + r.w) return r.n;
+    }
+    return null;
+  }
+
+  // Sequence-span mode (original)
   const { minSeq, seqRange, W } = flameMeta;
   const z = state.flameZoom;
   const visStart = z.start * seqRange + minSeq;
@@ -1075,6 +1318,90 @@ function copyXmlToClipboard(seq, btn) {
 // ═══════════════════════════════════════════════════════
 //  EVENT DETAIL
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+//  SMART DETAIL RENDERERS
+// ═══════════════════════════════════════════════════════
+function renderSmartDetail(ev) {
+  const et = (ev.eventType || '').toLowerCase();
+  
+  if (et.includes('db trace') || et.includes('database')) {
+    return renderDbDetail(ev);
+  }
+  if (et.includes('alert')) {
+    return renderAlertDetail(ev);
+  }
+  if (et.includes('connect')) {
+    return renderConnectDetail(ev);
+  }
+  return null;
+}
+
+function renderDbDetail(ev) {
+  const sql = ev.message || '';
+  if (!sql) return null;
+  
+  return `<div class="sd-section">
+    <div class="sd-title">SQL Query</div>
+    <div class="sd-content sd-sql">${formatSql(sql)}</div>
+  </div>`;
+}
+
+function formatSql(sql) {
+  const keywords = ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'ORDER BY', 'GROUP BY', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'UPDATE', 'SET', 'INSERT INTO', 'VALUES', 'DELETE', 'IN', 'ON', 'AS', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'BETWEEN', 'LIKE', 'NULL', 'IS', 'NOT', 'UNION', 'ALL'];
+  let formatted = escHtml(sql);
+  
+  // Simple keyword highlighting
+  keywords.forEach(kw => {
+    const re = new RegExp(`\\b${kw}\\b`, 'gi');
+    formatted = formatted.replace(re, m => `<span class="keyword">${m.toUpperCase()}</span>`);
+  });
+  
+  return formatted;
+}
+
+function renderAlertDetail(ev) {
+  const msg = ev.message || '';
+  // Basic alert parsing: looking for "threshold" and "value"
+  // Example: "Threshold: 500 ms, Actual: 1200 ms"
+  let html = `<div class="alert-box">
+    <div class="sd-title">Performance Alert</div>
+    <div class="sd-content">${escHtml(msg)}</div>`;
+    
+  const thresholdMatch = msg.match(/threshold[:\s]+(\d+)/i);
+  const actualMatch = msg.match(/(?:actual|value)[:\s]+(\d+)/i);
+  
+  if (thresholdMatch || actualMatch) {
+    html += `<div class="alert-metrics">`;
+    if (thresholdMatch) {
+      html += `<div class="am-item"><span class="am-label">Threshold</span><span class="am-value ok">${thresholdMatch[1]}ms</span></div>`;
+    }
+    if (actualMatch) {
+      html += `<div class="am-item"><span class="am-label">Actual</span><span class="am-value">${actualMatch[1]}ms</span></div>`;
+    }
+    html += `</div>`;
+  }
+  
+  html += `</div>`;
+  return html;
+}
+
+function renderConnectDetail(ev) {
+  const msg = ev.message || '';
+  if (!msg.startsWith('{') && !msg.startsWith('<')) return null;
+  
+  try {
+    if (msg.startsWith('{')) {
+      const obj = JSON.parse(msg);
+      return `<div class="sd-section">
+        <div class="sd-title">JSON Payload</div>
+        <div class="sd-content mono">${escHtml(JSON.stringify(obj, null, 2))}</div>
+      </div>`;
+    }
+  } catch(e) {}
+  
+  return null;
+}
+
 function showEventDetail(seq) {
   const ev = state.events.find(e => e.seq === seq);
   if (!ev) return;
@@ -1128,6 +1455,15 @@ function showEventDetail(seq) {
   }
 
   body.innerHTML = html;
+
+  // SMART DETAIL
+  const sdHtml = renderSmartDetail(ev);
+  if (sdHtml) {
+    const sdWrap = document.createElement('div');
+    sdWrap.className = 'smart-detail';
+    sdWrap.innerHTML = sdHtml;
+    body.insertBefore(sdWrap, body.firstChild);
+  }
 
   const bmBtn = document.getElementById('detail-bm-btn');
   if (bmBtn) {
@@ -1319,6 +1655,7 @@ function switchTab(name) {
 
   if (name === 'flame') setTimeout(drawFlamegraph, 50);
   if (name === 'tree') renderTree();
+  if (name === 'analytics') renderAnalytics();
   if (name === 'bookmarks') renderBookmarksPanel();
 }
 
@@ -1374,7 +1711,11 @@ function loadFile(file) {
       state.stats = buildStats(state.events);
       state.filteredEvents = [...state.events];
       state.treeRoots = buildTree(state.events);
+      propagateOwnDuration(state.treeRoots, state.events);
+      state.stats = buildStats(state.events); // rebuild after propagation
       state.flameNodes = buildFlameNodes(state.treeRoots);
+      state.analyticsData = buildAnalytics(state.events);
+      sortAnalytics('selfTime');
 
       updateTabBadges();
       populateTypeFilter();

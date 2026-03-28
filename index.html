@@ -38,6 +38,7 @@
     <div class="tab" data-tab="tree">Tree</div>
     <div class="tab" data-tab="table">Table</div>
     <div class="tab" data-tab="flame">Flamegraph</div>
+    <div class="tab" data-tab="analytics" id="analytics-tab">Analytics</div>
     <div class="tab" data-tab="bookmarks" id="bookmarks-tab">★ Bookmarks</div>
     <div class="tab" data-tab="search" id="search-tab" style="display:none">Search</div>
   </div>
@@ -99,7 +100,8 @@
           <div class="th" data-col="eventType" onclick="sortTable('eventType')">EVENT TYPE</div>
           <div class="th" data-col="keyname" onclick="sortTable('keyname')">NAME</div>
           <div class="th" data-col="step" onclick="sortTable('step')">STEP</div>
-          <div class="th" data-col="elapsed" onclick="sortTable('elapsed')">ELAPSED</div>
+          <div class="th" data-col="elapsed" onclick="sortTable('elapsed')">TOTAL</div>
+          <div class="th" data-col="ownDuration" onclick="sortTable('ownDuration')">SELF</div>
           <div class="th" data-col="stepStatus" onclick="sortTable('stepStatus')">STATUS</div>
           <div class="th" data-col="threadName" onclick="sortTable('threadName')">THREAD</div>
         </div>
@@ -120,6 +122,7 @@
           <button class="flame-btn" onclick="flameZoomIn()">Zoom In</button>
           <button class="flame-btn" onclick="flameZoomOut()">Zoom Out</button>
           <button class="flame-btn" onclick="flameReset()">Reset</button>
+          <button class="flame-btn" id="flame-mode-btn" onclick="toggleFlameMode()" title="Switch between Sequence Span and Self Time layouts">⏱ Self Time</button>
           <span style="color:var(--muted);font-size:11px;">Click a frame to select • Scroll to zoom • Drag to pan</span>
           <span id="flame-info"></span>
         </div>
@@ -132,6 +135,27 @@
           <div class="ft-type" id="ft-type"></div>
           <div class="ft-name" id="ft-name"></div>
           <div class="ft-elapsed" id="ft-elapsed"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ANALYTICS -->
+    <div class="panel" id="panel-analytics">
+      <div id="analytics-panel" style="height:100%;display:flex;flex-direction:column;">
+        <div id="analytics-toolbar">
+          <span style="color:var(--muted);font-size:10px;">Aggregated by Rule Name / Step • Sorted by Self Time (Descending)</span>
+          <span id="analytics-count" style="margin-left:auto;color:var(--muted);font-size:10px;"></span>
+        </div>
+        <div id="analytics-header">
+          <div class="ah sorted desc" data-col="selfTime" onclick="sortAnalytics('selfTime')">SELF TIME</div>
+          <div class="ah" data-col="totalTime" onclick="sortAnalytics('totalTime')">TOTAL TIME</div>
+          <div class="ah" data-col="hits" onclick="sortAnalytics('hits')">HITS</div>
+          <div class="ah" data-col="avgTime" onclick="sortAnalytics('avgTime')">AVG</div>
+          <div class="ah" data-col="ruleName" onclick="sortAnalytics('ruleName')">RULE NAME</div>
+          <div class="ah" data-col="eventType" onclick="sortAnalytics('eventType')">TYPE</div>
+        </div>
+        <div id="analytics-scroller" style="flex:1;overflow-y:auto;">
+          <div id="analytics-rows"></div>
         </div>
       </div>
     </div>
