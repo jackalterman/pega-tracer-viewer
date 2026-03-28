@@ -506,16 +506,27 @@ function renderAnalytics() {
 
   let html = '';
   for (const d of state.analyticsData) {
-    html += `<div class="arow">
+    const ruleEsc = escHtml(d.ruleName);
+    html += `<div class="arow" data-rulename="${ruleEsc}" style="cursor:pointer;" title="Click to search for all events with this rule name">
       <div class="atd self">${formatElapsed(d.selfTime)}</div>
       <div class="atd time">${formatElapsed(d.totalTime)}</div>
       <div class="atd">${d.hits.toLocaleString()}</div>
       <div class="atd mono">${formatElapsed(d.avgTime)}</div>
-      <div class="atd bold" title="${escHtml(d.ruleName)}">${escHtml(d.ruleName)}</div>
+      <div class="atd bold" title="${ruleEsc}">${ruleEsc}</div>
       <div class="atd ${getEventTypeClass(d.eventType)}">${escHtml(d.eventType)}</div>
     </div>`;
   }
   rowsEl.innerHTML = html;
+
+  // Delegated click — safe regardless of special chars in rule names
+  rowsEl.onclick = (e) => {
+    const row = e.target.closest('.arow');
+    if (!row) return;
+    const ruleName = row.dataset.rulename;
+    if (!ruleName) return;
+    const input = document.getElementById('gsearch-input');
+    if (input) { input.value = ruleName; runGlobalSearch(ruleName); }
+  };
 }
 
 function sortAnalytics(col) {
@@ -816,6 +827,12 @@ function toggleFlameMode() {
   if (btn) {
     btn.classList.toggle('active', state.flameMode === 'self');
   }
+  const legend = document.getElementById('flame-legend');
+  if (legend) {
+    legend.textContent = state.flameMode === 'self'
+      ? 'Each bar = one rule; width = self CPU time (excl. children); depth = call nesting; bars packed by tree order'
+      : 'Each bar = one rule; width = sequence span (≈ time); depth = call nesting; left→right = chronological';
+  }
   state.flameZoom = { start: 0, end: 1 };
   drawFlamegraph();
 }
@@ -1049,25 +1066,87 @@ function initFlameEvents() {
     drawFlamegraph();
   }, { passive: false });
 
-  let dragStartX = null, dragStartZoom = null;
+  // ── Rubber-band zoom + pan ──
+  // Primary drag (left button, no Ctrl) = rubber-band box zoom
+  // Ctrl+drag or middle-button = pan
+  let dragState = null; // { mode:'box'|'pan', startX, startY, startZoom }
+
+  // Overlay div for the selection box
+  const selBox = document.createElement('div');
+  selBox.style.cssText = 'position:absolute;pointer-events:none;border:2px solid var(--blue);background:rgba(137,180,250,0.12);display:none;';
+  document.getElementById('flame-canvas-wrap').appendChild(selBox);
+
   canvas.addEventListener('mousedown', e => {
-    dragStartX = e.clientX;
-    dragStartZoom = { ...state.flameZoom };
-  });
-  canvas.addEventListener('mousemove', e => {
-    if (dragStartX === null) return;
-    const dx = e.clientX - dragStartX;
-    const span = dragStartZoom.end - dragStartZoom.start;
-    const delta = -dx / (flameCtx ? flameCtx.canvas.width : 800) * span;
-    const ns = Math.max(0, dragStartZoom.start + delta);
-    const ne = Math.min(1, dragStartZoom.end + delta);
-    if (ne - ns === span) {
-      state.flameZoom.start = ns;
-      state.flameZoom.end = ne;
-      drawFlamegraph();
+    if (e.button === 1) e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const isPan = e.button === 1 || e.button === 2 || e.ctrlKey || e.metaKey;
+    dragState = {
+      mode: isPan ? 'pan' : 'box',
+      startX: e.clientX - rect.left,
+      startY: e.clientY - rect.top,
+      clientStartX: e.clientX,
+      startZoom: { ...state.flameZoom },
+    };
+    if (!isPan) {
+      selBox.style.left = dragState.startX + 'px';
+      selBox.style.top = '0px';
+      selBox.style.width = '0px';
+      selBox.style.height = canvas.height + 'px';
+      selBox.style.display = 'block';
     }
   });
-  canvas.addEventListener('mouseup', () => { dragStartX = null; });
+
+  canvas.addEventListener('mousemove', e => {
+    if (!dragState) return;
+    const rect = canvas.getBoundingClientRect();
+    const curX = e.clientX - rect.left;
+
+    if (dragState.mode === 'pan') {
+      const dx = e.clientX - dragState.clientStartX;
+      const span = dragState.startZoom.end - dragState.startZoom.start;
+      const delta = -dx / (canvas.width || 800) * span;
+      const ns = Math.max(0, dragState.startZoom.start + delta);
+      const ne = Math.min(1, dragState.startZoom.end + delta);
+      if (ne - ns >= span * 0.999) {
+        state.flameZoom.start = ns;
+        state.flameZoom.end = ne;
+        drawFlamegraph();
+      }
+    } else {
+      // rubber-band: update selection box
+      const x1 = Math.min(dragState.startX, curX);
+      const x2 = Math.max(dragState.startX, curX);
+      selBox.style.left = x1 + 'px';
+      selBox.style.width = (x2 - x1) + 'px';
+    }
+  });
+
+  function endDrag(e) {
+    if (!dragState) return;
+    const rect = canvas.getBoundingClientRect();
+    const curX = e.clientX - rect.left;
+
+    if (dragState.mode === 'box') {
+      selBox.style.display = 'none';
+      const x1 = Math.min(dragState.startX, curX);
+      const x2 = Math.max(dragState.startX, curX);
+      const W = canvas.width || 800;
+      if (x2 - x1 > 4) {
+        // Map pixel range to zoom range
+        const z = dragState.startZoom;
+        const span = z.end - z.start;
+        const newStart = z.start + (x1 / W) * span;
+        const newEnd   = z.start + (x2 / W) * span;
+        state.flameZoom.start = Math.max(0, newStart);
+        state.flameZoom.end   = Math.min(1, newEnd);
+        drawFlamegraph();
+      }
+    }
+    dragState = null;
+  }
+
+  canvas.addEventListener('mouseup', endDrag);
+  canvas.addEventListener('mouseleave', endDrag);
 }
 
 function findFlameHit(mx, my) {

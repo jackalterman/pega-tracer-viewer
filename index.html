@@ -123,7 +123,13 @@
           <button class="flame-btn" onclick="flameZoomOut()">Zoom Out</button>
           <button class="flame-btn" onclick="flameReset()">Reset</button>
           <button class="flame-btn" id="flame-mode-btn" onclick="toggleFlameMode()" title="Switch between Sequence Span and Self Time layouts">⏱ Self Time</button>
-          <span style="color:var(--muted);font-size:11px;">Click a frame to select • Scroll to zoom • Drag to pan</span>
+          <span style="color:var(--muted);font-size:11px;">
+            <b style="color:var(--blue)">Drag</b> to select &amp; zoom &nbsp;•&nbsp;
+            <b style="color:var(--blue)">Ctrl+Drag</b> to pan &nbsp;•&nbsp;
+            <b style="color:var(--blue)">Scroll</b> to zoom &nbsp;•&nbsp;
+            <b style="color:var(--blue)">Click</b> a bar to inspect
+          </span>
+          <span id="flame-legend" style="color:var(--muted);font-size:11px;">Each bar = one rule; width = sequence span (≈ time); depth = call nesting</span>
           <span id="flame-info"></span>
         </div>
         <div id="flame-body">

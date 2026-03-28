@@ -448,6 +448,7 @@ mark.sh { background: rgba(249,226,175,.25); color: var(--amber); border-radius:
   align-items: center; transition: background 0.08s;
 }
 .arow:hover { background: var(--bg3); }
+.arow:active { background: rgba(137,180,250,0.08); }
 .atd { padding: 8px 6px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atd.bold { font-weight: 700; }
 .atd.mono { font-family: var(--font); font-size: 10px; }
