@@ -26,7 +26,20 @@ const state = {
   analyticsSortCol: 'selfTime',
   analyticsSortDir: 'desc',
   flameMode: 'seq',  // 'seq' | 'self'
+  smartViewEnabled: true,
 };
+
+const SMART_VIEW_KEY = 'pega-smart-view';
+function loadSettings() {
+  const saved = localStorage.getItem(SMART_VIEW_KEY);
+  if (saved !== null) {
+    state.smartViewEnabled = saved === 'true';
+    const btn = document.getElementById('smart-toggle-btn');
+    if (btn) btn.classList.toggle('active', state.smartViewEnabled);
+  }
+}
+// Call immediately or on DOM load
+document.addEventListener('DOMContentLoaded', loadSettings);
 
 const ROW_HEIGHT = 32;
 
@@ -1401,6 +1414,7 @@ function copyXmlToClipboard(seq, btn) {
 //  SMART DETAIL RENDERERS
 // ═══════════════════════════════════════════════════════
 function renderSmartDetail(ev) {
+  if (!state.smartViewEnabled) return null;
   const et = (ev.eventType || '').toLowerCase();
   
   if (et.includes('db trace') || et.includes('database')) {
@@ -1468,15 +1482,25 @@ function renderConnectDetail(ev) {
   const msg = ev.message || '';
   if (!msg.startsWith('{') && !msg.startsWith('<')) return null;
   
-  try {
-    if (msg.startsWith('{')) {
+  if (msg.startsWith('{')) {
+    try {
       const obj = JSON.parse(msg);
       return `<div class="sd-section">
         <div class="sd-title">JSON Payload</div>
         <div class="sd-content mono">${escHtml(JSON.stringify(obj, null, 2))}</div>
       </div>`;
-    }
-  } catch(e) {}
+    } catch(e) {}
+  }
+  
+  if (msg.startsWith('<')) {
+    try {
+      const pretty = prettyPrintXml(msg);
+      return `<div class="sd-section">
+        <div class="sd-title">XML Payload</div>
+        <div class="sd-content mono">${escHtml(pretty)}</div>
+      </div>`;
+    } catch(e) {}
+  }
   
   return null;
 }
@@ -1539,8 +1563,11 @@ function showEventDetail(seq) {
   const sdHtml = renderSmartDetail(ev);
   if (sdHtml) {
     const sdWrap = document.createElement('div');
-    sdWrap.className = 'smart-detail';
-    sdWrap.innerHTML = sdHtml;
+    sdWrap.className = 'smart-insight-card';
+    sdWrap.innerHTML = `
+      <div class="smart-badge">✨ SMART INSIGHT</div>
+      ${sdHtml}
+    `;
     body.insertBefore(sdWrap, body.firstChild);
   }
 
@@ -1719,6 +1746,14 @@ function renderBookmarksPanel() {
     </div>`;
   }
   scroller.innerHTML = html;
+}
+
+function toggleSmartView() {
+  state.smartViewEnabled = !state.smartViewEnabled;
+  localStorage.setItem(SMART_VIEW_KEY, state.smartViewEnabled);
+  const btn = document.getElementById('smart-toggle-btn');
+  if (btn) btn.classList.toggle('active', state.smartViewEnabled);
+  if (state.selectedEventSeq !== -1) showEventDetail(state.selectedEventSeq);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2351,6 +2386,7 @@ window.addEventListener('load', () => {
   initDragDrop();
   initFlameEvents();
   initResizeHandle();
+  loadSettings();
   renderSummary();
 
   document.addEventListener('keydown', e => {
