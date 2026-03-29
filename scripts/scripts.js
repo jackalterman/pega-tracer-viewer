@@ -212,13 +212,15 @@ class PegaStreamParser {
     const openTag = openTagEnd > 0 ? xmlStr.slice(0, openTagEnd) : xmlStr;
     while ((m = attrRe.exec(openTag)) !== null) attrs[m[1]] = m[2];
 
-    const childRe = /<(\w+)>([^<]*)<\/\1>/g;
+    const childRe = /<(\w+)>([\s\S]*?)<\/\1>/g;
     const children = {};
-    while ((m = childRe.exec(xmlStr)) !== null) children[m[1]] = m[2];
-
     const decodeEnt = s => s
       .replace(/&amp;/g,'&').replace(/&lt;/g,'<')
       .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+
+    while ((m = childRe.exec(xmlStr)) !== null) {
+      children[m[1]] = decodeEnt(m[2]);
+    }
 
     const et = decodeEnt(attrs.eventType || '');
     const ks = decodeEnt(attrs.stepStatus || '');
@@ -240,8 +242,9 @@ class PegaStreamParser {
       dateTime:   children.DateTime || '',
       interaction:children.Interaction || '',
       threadName: children.ThreadName || '',
-      workPool:   decodeEnt(children.WorkPool || ''),
-      message:    decodeEnt(children.Message || children.ExceptionMessage || children.Status || ''),
+      workPool:   children.WorkPool || '',
+      message:    children.Message || children.ExceptionMessage || children.Status || children.DBTSQL || '',
+      children:   children,
       rawXml:     xmlStr.length < 8000 ? xmlStr : xmlStr.slice(0, 8000) + '\n... [truncated]',
     };
   }
@@ -1417,7 +1420,7 @@ function renderSmartDetail(ev) {
   if (!state.smartViewEnabled) return null;
   const et = (ev.eventType || '').toLowerCase();
   
-  if (et.includes('db trace') || et.includes('database')) {
+  if (et.includes('db ') || et.includes('database') || et.includes('sql') || et.includes('dbt')) {
     return renderDbDetail(ev);
   }
   if (et.includes('alert')) {
@@ -1430,13 +1433,33 @@ function renderSmartDetail(ev) {
 }
 
 function renderDbDetail(ev) {
-  const sql = ev.message || '';
+  const sql = ev.children?.DBTSQL || ev.message || '';
   if (!sql) return null;
   
-  return `<div class="sd-section">
+  let html = `<div class="sd-section">
     <div class="sd-title">SQL Query</div>
     <div class="sd-content sd-sql">${formatSql(sql)}</div>
   </div>`;
+
+  // Show other DBT metrics if available
+  const metrics = [];
+  if (ev.children?.DBTROW) metrics.push({ label: 'Rows', val: ev.children.DBTROW });
+  if (ev.children?.DBTCPP) metrics.push({ label: 'Pool', val: ev.children.DBTCPP });
+  if (ev.children?.DBTERR) metrics.push({ label: 'DB Error', val: ev.children.DBTERR, class: 'danger' });
+  
+  if (metrics.length > 0) {
+    html += `<div class="alert-box" style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.1); padding-top:10px;">
+      <div class="alert-metrics">`;
+    metrics.forEach(m => {
+      html += `<div class="am-item">
+        <span class="am-label">${escHtml(m.label)}</span>
+        <span class="am-value ${m.class || ''}">${escHtml(m.val)}</span>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  return html;
 }
 
 function formatSql(sql) {
@@ -1479,7 +1502,7 @@ function renderAlertDetail(ev) {
 }
 
 function renderConnectDetail(ev) {
-  const msg = ev.message || '';
+  const msg = ev.children?.ConnectRequest || ev.children?.ConnectResponse || ev.message || '';
   if (!msg.startsWith('{') && !msg.startsWith('<')) return null;
   
   if (msg.startsWith('{')) {
