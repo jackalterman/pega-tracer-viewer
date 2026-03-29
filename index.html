@@ -39,6 +39,7 @@
     <div class="tab" data-tab="table">Table</div>
     <div class="tab" data-tab="flame">Flamegraph</div>
     <div class="tab" data-tab="analytics" id="analytics-tab">Analytics</div>
+    <div class="tab" data-tab="watch" id="watch-tab">Property Watch</div>
     <div class="tab" data-tab="bookmarks" id="bookmarks-tab">★ Bookmarks</div>
     <div class="tab" data-tab="search" id="search-tab" style="display:none">Search</div>
   </div>
@@ -53,7 +54,9 @@
     </div>
 
     <!-- SUMMARY -->
-    <div class="panel active" id="panel-summary"></div>
+    <div class="panel active" id="panel-summary">
+      <div id="data-audit-info" class="hidden"></div>
+    </div>
 
     <!-- TREE -->
     <div class="panel" id="panel-tree">
@@ -100,9 +103,8 @@
           <div class="th" data-col="eventType" onclick="sortTable('eventType')">EVENT TYPE</div>
           <div class="th" data-col="keyname" onclick="sortTable('keyname')">NAME</div>
           <div class="th" data-col="step" onclick="sortTable('step')">STEP</div>
+          <div class="th" data-col="stepStatus" onclick="sortTable('stepStatus')">STATUS+W</div>
           <div class="th" data-col="elapsed" onclick="sortTable('elapsed')">TOTAL</div>
-          <div class="th" data-col="ownDuration" onclick="sortTable('ownDuration')">SELF</div>
-          <div class="th" data-col="stepStatus" onclick="sortTable('stepStatus')">STATUS</div>
           <div class="th" data-col="threadName" onclick="sortTable('threadName')">THREAD</div>
         </div>
         <div id="table-wrap" style="flex:1;overflow:hidden;position:relative;">
@@ -176,6 +178,19 @@
       <div id="sr-scroller"></div>
     </div>
 
+    <!-- WATCH -->
+    <div class="panel" id="panel-watch">
+      <div id="watch-panel" style="height:100%;display:flex;flex-direction:column;">
+        <div id="watch-toolbar">
+          <span style="color:var(--muted);font-size:10px;">Track property transitions across the trace • Highlight changes in Tree/Table</span>
+          <button class="watch-btn" onclick="clearAllWatches()" style="margin-left:auto;">Clear All</button>
+        </div>
+        <div id="watch-body" style="flex:1;overflow-y:auto;">
+          <div class="watch-empty">No properties being watched.<br>Find a property in the Detail XML, then use the <b>Watch</b> button or Context Menu.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- BOOKMARKS -->
     <div class="panel" id="panel-bookmarks">
       <div id="bm-header">
@@ -207,6 +222,25 @@
   </div>
 </div>
 </div><!-- /#app-body -->
+
+<!-- COMPARE BANNER -->
+<div id="compare-banner" class="hidden">
+  <div class="cb-info">Comparing Stage 1/2: <span id="cb-first-name">None</span></div>
+  <div class="cb-actions">
+    <button class="cb-btn cancel" onclick="cancelCompare()">Cancel</button>
+  </div>
+</div>
+
+<!-- DIFF MODAL -->
+<div id="diff-modal" class="modal-overlay hidden">
+  <div class="modal-content diff-modal">
+    <div class="modal-header">
+      <h3>Clipboard Diff</h3>
+      <button onclick="closeDiff()">✕</button>
+    </div>
+    <div id="diff-body"></div>
+  </div>
+</div>
 
 <script src="scripts/scripts.js"></script>
 </body>

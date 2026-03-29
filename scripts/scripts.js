@@ -27,6 +27,9 @@ const state = {
   analyticsSortDir: 'desc',
   flameMode: 'seq',  // 'seq' | 'self'
   smartViewEnabled: true,
+  watchedProperties: [], // Array of { path: string, label: string }
+  compareSelection: { first: null, second: null }, // Event objects
+  dataCompleteness: { hasStepPage: false, hasParams: false },
 };
 
 const SMART_VIEW_KEY = 'pega-smart-view';
@@ -251,6 +254,85 @@ class PegaStreamParser {
 }
 
 // ═══════════════════════════════════════════════════════
+//  PROPERTY WATCHER LOGIC
+// ═══════════════════════════════════════════════════════
+function extractPropertyValue(ev, path) {
+  if (!ev.children) return null;
+  // Combine potential pages
+  const content = (ev.children.StepPage || '') + (ev.children.ParameterPage || '') + (ev.children.PrimaryPage || '') + (ev.children.pxRequestor || '');
+  if (!content) return null;
+
+  // Simple tag search: <PropName>Value</PropName>
+  // Path might be pxRequestor.pxUserIdentifier or just pyStatusWork
+  const parts = path.split('.');
+  const lastPart = parts[parts.length - 1];
+  
+  const re = new RegExp(`<${lastPart}>([\\s\\S]*?)<\\/${lastPart}>`);
+  const m = content.match(re);
+  return m ? m[1].trim() : null;
+}
+
+function computeWatchHistory(path) {
+  const history = [];
+  let lastVal = null;
+  for (const ev of state.events) {
+    const val = extractPropertyValue(ev, path);
+    if (val !== null && val !== lastVal) {
+      history.push({ seq: ev.seq, val: val, changed: lastVal !== null });
+      lastVal = val;
+    }
+  }
+  return history;
+}
+
+function addWatch(path) {
+  if (state.watchedProperties.find(p => p.path === path)) return;
+  state.watchedProperties.push({ path: path, history: computeWatchHistory(path) });
+  renderWatchTab();
+  showToast(`Watching property: ${path}`);
+}
+
+function removeWatch(path) {
+  state.watchedProperties = state.watchedProperties.filter(p => p.path !== path);
+  renderWatchTab();
+}
+
+function renderWatchTab() {
+  const panel = document.getElementById('panel-watch');
+  const body = document.getElementById('watch-body');
+  if (!state.watchedProperties.length) {
+    body.innerHTML = `<div class="watch-empty">No properties being watched.<br>Add one from the detail panel by clicking a property tag.</div>`;
+    return;
+  }
+
+  let html = '';
+  for (const wp of state.watchedProperties) {
+    html += `
+      <div class="watch-card">
+        <div class="wc-header">
+          <div class="wc-path">${escHtml(wp.path)}</div>
+          <button class="wc-btn" onclick="removeWatch('${wp.path}')">✕ Remove</button>
+        </div>
+        <div class="wc-history">
+    `;
+    for (const h of wp.history) {
+      html += `
+        <div class="wh-row" onclick="showEventDetail(${h.seq})">
+          <span class="wh-seq">#${h.seq}</span>
+          <span class="wh-val">${escHtml(h.val)}</span>
+          ${h.changed ? '<span class="wh-change">CHANGED</span>' : ''}
+        </div>
+      `;
+    }
+    html += `
+        </div>
+      </div>
+    `;
+  }
+  body.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════
 //  TREE BUILDER
 // ═══════════════════════════════════════════════════════
 function buildTree(events) {
@@ -369,6 +451,13 @@ function buildStats(events) {
   s.slowest.sort((a,b) => (b.ownDuration || 0) - (a.ownDuration || 0));
   s.slowest = s.slowest.slice(0, 20);
 
+  // Check for specialized data tags (Smart Fallback)
+  state.dataCompleteness = {
+    hasStepPage: events.some(e => e.children && (e.children.StepPage || e.children.PrimaryPage)),
+    hasParams:   events.some(e => e.children && e.children.ParameterPage),
+    hasAlerts:   events.some(e => (e.eventType||'').toLowerCase().includes('alert')),
+  };
+
   return s;
 }
 
@@ -451,6 +540,46 @@ function renderSummary() {
   }
 
   panel.innerHTML = html;
+  renderDataAudit(); // Call this AFTER setting panel.innerHTML if Audit is outside, or ENSURE it's inside.
+}
+
+function renderDataAudit() {
+  const panel = document.getElementById('panel-summary');
+  let auditDiv = document.getElementById('data-audit-info');
+  
+  if (!auditDiv) {
+    auditDiv = document.createElement('div');
+    auditDiv.id = 'data-audit-info';
+    panel.prepend(auditDiv);
+  }
+  
+  const dc = state.dataCompleteness;
+  if (!dc) {
+    auditDiv.classList.add('hidden');
+    return;
+  }
+
+  auditDiv.classList.remove('hidden');
+
+  let html = '<div style="font-weight:700;margin-bottom:8px;color:var(--text);display:flex;align-items:center;gap:6px;">🕵️ Data Intake Audit</div>';
+  
+  const item = (enabled, label, desc) => `
+    <div class="audit-item">
+      <div class="audit-dot ${enabled?'green':'red'}"></div>
+      <span style="color:${enabled?'var(--text)':'var(--muted)'};">${label}</span>
+      <span style="color:var(--muted);font-size:10px;margin-left:4px;">— ${desc}</span>
+    </div>
+  `;
+
+  html += item(dc.hasStepPage, 'Clipboard Data', dc.hasStepPage ? 'Full page snapshots captured.' : 'StepPage missing. Diff/Watch features will be limited.');
+  html += item(dc.hasParams, 'Parameter Data', dc.hasParams ? 'Parameter pages captured.' : 'ParameterPage missing.');
+  
+  if (!dc.hasStepPage && !dc.hasParams) {
+    html += `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);color:var(--amber);font-size:10px;">
+      💡 Tip: To enable full state investigation, check "Capture Step Page" in Pega Tracer Settings before exporting.
+    </div>`;
+  }
+  auditDiv.innerHTML = html;
 }
 
 function card(label, value, cls, sub) {
@@ -643,6 +772,16 @@ function renderTreeNode(node) {
 
   const childCount = hasChildren ? `<span style="color:var(--muted);font-size:9px;margin-right:6px;">(${node.children.length})</span>` : '';
 
+  // Watch highlight
+  let watchHtml = '';
+  for (const wp of state.watchedProperties) {
+    const entry = wp.history.find(h => h.seq === node.seq);
+    if (entry && entry.changed) {
+      watchHtml += `<span class="val-change-marker" title="Watched property '${wp.path}' changed value here">Δ</span>`;
+      break;
+    }
+  }
+
   const tnStarCls = state.bookmarks.has(node.seq) ? 'bm-star active' : 'bm-star';
   const tnStarIcon = state.bookmarks.has(node.seq) ? '★' : '☆';
 
@@ -656,6 +795,7 @@ function renderTreeNode(node) {
     <span class="tn-name" title="${escHtml(displayName)}">${escHtml(displayName.slice(0,100))}</span>
     ${childCount}
     ${statusHtml}
+    ${watchHtml}
     ${elapsedHtml}
     <button class="${tnStarCls}" onclick="toggleBookmark(${node.seq}, event)" title="Toggle bookmark" style="margin-left:4px;margin-right:4px;">${tnStarIcon}</button>
   </div>`;
@@ -796,6 +936,10 @@ function renderVisibleRows() {
       <div class="td ${etClass}">${escHtml(ev.eventType||'')}</div>
       <div class="td" title="${escHtml(ev.keyname||ev.name||'')}">${escHtml((ev.keyname||ev.name||'').slice(0,80))}</div>
       <div class="td">${escHtml(ev.step||'')}</div>
+      <div class="td status-cell" style="display:flex;align-items:center;gap:4px;">
+        ${st ? `<span class="er-status ${st.toLowerCase()}">${st}</span>` : ''}
+        ${state.watchedProperties.some(wp => wp.history.some(h => h.seq === ev.seq && h.changed)) ? `<span class="val-change-marker" title="Watched property changed value here">Δ</span>` : ''}
+      </div>
       <div class="td elapsed">${formatElapsed(ev.elapsed)}</div>
       <div class="td" style="color:var(--teal);">${formatElapsed(ev.ownDuration)}</div>
       <div class="td ${st==='Fail'?'status-fail':(st==='Warning'?'status-warn':'')} ">${escHtml(st||'')}</div>
@@ -1531,6 +1675,13 @@ function renderConnectDetail(ev) {
 function showEventDetail(seq) {
   const ev = state.events.find(e => e.seq === seq);
   if (!ev) return;
+
+  // Handle Comparison mode
+  if (state.compareSelection.first && state.compareSelection.first.seq !== seq) {
+    pickSecondForCompare(seq);
+    return;
+  }
+
   state.selectedEventSeq = seq;
 
   const body = document.getElementById('detail-body');
@@ -2424,3 +2575,16 @@ window.addEventListener('load', () => {
     if (state.currentTab === 'flame') drawFlamegraph();
   });
 });
+
+function showToast(msg) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.style = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--bg3);color:var(--text);padding:8px 16px;border-radius:20px;border:1px solid var(--blue);font-size:11px;z-index:3000;box-shadow:0 10px 30px rgba(0,0,0,0.5);opacity:0;transition:opacity 0.3s;pointer-events:none;';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+}
