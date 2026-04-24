@@ -229,7 +229,12 @@ class PegaStreamParser {
     }
 
     const et = decodeEnt(attrs.eventType || '');
-    const ks = decodeEnt(attrs.stepStatus || '');
+    let ks = decodeEnt(attrs.stepStatus || '');
+
+    // Normalize step status to be case-insensitive for downstream logic
+    const ksLower = ks.toLowerCase();
+    if (ksLower === 'fail') ks = 'Fail';
+    else if (ksLower === 'warning' || ksLower === 'warn') ks = 'Warning';
 
     return {
       seq:        parseInt(attrs.sequence) || 0,
@@ -436,8 +441,8 @@ function buildStats(events) {
 
   for (const ev of events) {
     const st = ev.stepStatus;
-    if (st === 'Fail' || st === 'fail') s.fails.push(ev);
-    else if (st === 'Warning' || st === 'warning' || st === 'Warn') s.warnings.push(ev);
+    if (st === 'Fail') s.fails.push(ev);
+    else if (st === 'Warning') s.warnings.push(ev);
 
     const et = (ev.eventType||'').toLowerCase();
     if (et.includes('exception')) s.exceptions.push(ev);
@@ -1074,7 +1079,7 @@ function renderVisibleRows() {
     if (!ev) continue;
     const y = i * ROW_HEIGHT;
     const st = ev.stepStatus;
-    const rowClass = st === 'Fail' ? 'trow fail' : (st === 'Warning' || st === 'Warn') ? 'trow warning' : ((ev.eventType||'').toLowerCase().includes('exception') ? 'trow exception' : 'trow');
+    const rowClass = st === 'Fail' ? 'trow fail' : st === 'Warning' ? 'trow warning' : ((ev.eventType||'').toLowerCase().includes('exception') ? 'trow exception' : 'trow');
     const selected = ev.seq === state.selectedEventSeq ? ' selected' : '';
     const bookmarked = state.bookmarks.has(ev.seq) ? ' bookmarked' : '';
     const etClass = getEventTypeClass(ev.eventType);
@@ -2059,7 +2064,7 @@ function renderBookmarksPanel() {
     const displayName = ev.keyname || ev.name || '';
     const st = ev.stepStatus;
     const statusHtml = st
-      ? `<span class="bm-status ${st.toLowerCase() === 'fail' ? 'fail' : 'warn'}">${escHtml(st)}</span>`
+      ? `<span class="bm-status ${st === 'Fail' ? 'fail' : 'warn'}">${escHtml(st)}</span>`
       : '';
     html += `<div class="bm-row" onclick="showEventDetail(${ev.seq})">
       <button class="bm-star active" onclick="toggleBookmark(${ev.seq}, event)" title="Remove bookmark">★</button>
@@ -2178,10 +2183,11 @@ function updateTabBadges() {
   });
 
   const sumTab = document.querySelector('.tab[data-tab="summary"]');
-  if (s && s.fails && s.exceptions && (s.fails.length + s.exceptions.length > 0)) {
+  const problemCount = (s.fails ? s.fails.length : 0) + (s.exceptions ? s.exceptions.length : 0);
+  if (problemCount > 0) {
     const b = document.createElement('span');
-    b.className = 'tab-badge warn';
-    b.textContent = s.fails.length + s.exceptions.length;
+    b.className = 'tab-badge'; // Red by default
+    b.textContent = problemCount;
     sumTab.appendChild(b);
   }
 
