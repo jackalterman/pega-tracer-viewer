@@ -22,9 +22,12 @@ const state = {
   flameDragStart: null,
   bookmarks: new Map(),   // seq → {seq, addedAt}
   currentFileName: '',    // used as localStorage key for bookmarks
-  analyticsData: [],
-  analyticsSortCol: 'selfTime',
-  analyticsSortDir: 'desc',
+  hotspotsData: [],
+  hotspotsSortCol: 'selfTime',
+  hotspotsSortDir: 'desc',
+  hotspotsFilter: '',
+  activeHotspotFilter: null, // { ruleName, eventType }
+  highlightedSeq: -1,
   flameMode: 'seq',  // 'seq' | 'self'
   smartViewEnabled: true,
   watchedProperties: [], // Array of { path: string, label: string }
@@ -608,10 +611,22 @@ function eventRow(ev, type) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  RULE ANALYTICS
+//  RULE HOTSPOTS (Aggregated performance)
 // ═══════════════════════════════════════════════════════
-function buildAnalytics(events) {
-  const map = new Map(); // key -> {ruleName, eventType, hits, totalTime, selfTime, maxTime}
+function buildHotspots(events) {
+  const map = new Map(); // key -> {ruleName, eventType, hits, totalTime, selfTime, dbTime, maxTime, minTime, slowestSeq}
+
+  function getIoTime(node) {
+    let io = 0;
+    const et = (node.eventType || '').toLowerCase();
+    if (et.includes('db-') || et.includes('connect-')) {
+      io += (node.totalElapsed || 0);
+    }
+    if (node.children) {
+      for (const c of node.children) io += getIoTime(c);
+    }
+    return io;
+  }
 
   function walk(nodes) {
     for (const n of nodes) {
@@ -620,13 +635,24 @@ function buildAnalytics(events) {
       const key = name + '|' + type;
 
       if (!map.has(key)) {
-        map.set(key, { ruleName: name, eventType: type, hits: 0, totalTime: 0, selfTime: 0, maxTime: 0 });
+        map.set(key, { 
+          ruleName: name, eventType: type, hits: 0, 
+          totalTime: 0, selfTime: 0, dbTime: 0,
+          maxTime: -1, minTime: Infinity, slowestSeq: -1 
+        });
       }
       const entry = map.get(key);
+      const dur = (n.totalElapsed || 0);
       entry.hits++;
-      entry.totalTime += (n.totalElapsed || 0);
+      entry.totalTime += dur;
       entry.selfTime += (n.ownDuration || 0);
-      if ((n.totalElapsed || 0) > entry.maxTime) entry.maxTime = n.totalElapsed;
+      entry.dbTime += getIoTime(n);
+
+      if (dur > entry.maxTime) {
+        entry.maxTime = dur;
+        entry.slowestSeq = n.seq;
+      }
+      if (dur < entry.minTime) entry.minTime = dur;
 
       if (n.children) walk(n.children);
     }
@@ -634,69 +660,180 @@ function buildAnalytics(events) {
   walk(state.treeRoots);
 
   const data = [...map.values()];
-  data.forEach(d => { d.avgTime = d.totalTime / d.hits; });
+  data.forEach(d => { 
+    d.avgTime = d.totalTime / d.hits; 
+    d.variance = d.maxTime - d.minTime;
+  });
   return data;
 }
 
-function renderAnalytics() {
-  const panel = document.getElementById('panel-analytics');
-  if (!state.analyticsData || !state.analyticsData.length) {
-    panel.innerHTML = '<div class="empty-msg">No analytics data. Load a tracer file first.</div>';
+function onHotspotsFilterInput() {
+  state.hotspotsFilter = document.getElementById('hotspots-filter').value.toLowerCase();
+  renderHotspots();
+}
+
+function renderHotspots() {
+  const panel = document.getElementById('panel-hotspots');
+  if (!state.hotspotsData || !state.hotspotsData.length) {
+    if (panel) panel.innerHTML = '<div class="empty-msg">No hotspots data. Load a tracer file first.</div>';
     return;
   }
 
-  const rowsEl = document.getElementById('analytics-rows');
-  const countEl = document.getElementById('analytics-count');
-  countEl.textContent = `${state.analyticsData.length} unique rules/steps`;
+  const rowsEl = document.getElementById('hotspots-rows');
+  const countEl = document.getElementById('hotspots-count');
+  
+  const filtered = state.hotspotsFilter 
+    ? state.hotspotsData.filter(d => d.ruleName.toLowerCase().includes(state.hotspotsFilter) || d.eventType.toLowerCase().includes(state.hotspotsFilter))
+    : state.hotspotsData;
+
+  countEl.textContent = `${filtered.length} unique rules/steps`;
+
+  // Find max values for heatmap normalization
+  const maxSelf = Math.max(...filtered.map(d => d.selfTime), 1);
+  const maxTotal = Math.max(...filtered.map(d => d.totalTime), 1);
+  const maxIo = Math.max(...filtered.map(d => d.dbTime), 1);
 
   let html = '';
-  for (const d of state.analyticsData) {
+  for (const d of filtered) {
     const ruleEsc = escHtml(d.ruleName);
-    html += `<div class="arow" data-rulename="${ruleEsc}" style="cursor:pointer;" title="Click to search for all events with this rule name">
-      <div class="atd self">${formatElapsed(d.selfTime)}</div>
-      <div class="atd time">${formatElapsed(d.totalTime)}</div>
+    const typeEsc = escHtml(d.eventType);
+    const wSelf = (d.selfTime / maxSelf * 100).toFixed(1);
+    const wTotal = (d.totalTime / maxTotal * 100).toFixed(1);
+    const wIo = (d.dbTime / maxIo * 100).toFixed(1);
+    
+    const isActive = state.activeHotspotFilter && 
+                     state.activeHotspotFilter.ruleName === d.ruleName && 
+                     state.activeHotspotFilter.eventType === d.eventType;
+
+    html += `<div class="arow ${isActive ? 'active-focus' : ''}" onclick="focusHotspot('${ruleEsc}', '${typeEsc}')">
+      <div class="atd self">
+        <div class="arelative-bar self" style="width:${wSelf}%"></div>
+        ${formatElapsed(d.selfTime)}
+      </div>
+      <div class="atd io">
+        <div class="arelative-bar io" style="width:${wIo}%"></div>
+        ${formatElapsed(d.dbTime)}
+      </div>
+      <div class="atd time">
+        <div class="arelative-bar total" style="width:${wTotal}%"></div>
+        ${formatElapsed(d.totalTime)}
+      </div>
       <div class="atd">${d.hits.toLocaleString()}</div>
-      <div class="atd mono">${formatElapsed(d.avgTime)}</div>
+      <div class="atd mono">${formatElapsed(d.variance)}</div>
       <div class="atd bold" title="${ruleEsc}">${ruleEsc}</div>
-      <div class="atd ${getEventTypeClass(d.eventType)}">${escHtml(d.eventType)}</div>
+      <div class="atd ${getEventTypeClass(d.eventType)}">${typeEsc}</div>
+      <button class="ajump-btn" onclick="jumpToSlowest(${d.slowestSeq}, event)" title="Jump to slowest execution of this rule">➜</button>
     </div>`;
   }
   rowsEl.innerHTML = html;
-
-  // Delegated click — safe regardless of special chars in rule names
-  rowsEl.onclick = (e) => {
-    const row = e.target.closest('.arow');
-    if (!row) return;
-    const ruleName = row.dataset.rulename;
-    if (!ruleName) return;
-    const input = document.getElementById('gsearch-input');
-    if (input) { input.value = ruleName; runGlobalSearch(ruleName); }
-  };
 }
 
-function sortAnalytics(col) {
-  if (state.analyticsSortCol === col) {
-    state.analyticsSortDir = state.analyticsSortDir === 'asc' ? 'desc' : 'asc';
+function focusHotspot(ruleName, eventType) {
+  state.activeHotspotFilter = { ruleName, eventType };
+  
+  // Show banner
+  const banner = document.getElementById('hotspots-focus-banner');
+  const ruleTxt = document.getElementById('hfb-rule');
+  if (banner) banner.classList.remove('hidden');
+  if (ruleTxt) ruleTxt.textContent = `${ruleName} (${eventType})`;
+
+  // Re-render hotspots to show active row
+  renderHotspots();
+
+  // Apply filters to Table and Tree
+  filterTable();
+  renderTree();
+  updateTabBadges();
+}
+
+function clearHotspotFilter() {
+  state.activeHotspotFilter = null;
+  const banner = document.getElementById('hotspots-focus-banner');
+  if (banner) banner.classList.add('hidden');
+  
+  renderHotspots();
+  filterTable();
+  renderTree();
+  updateTabBadges();
+}
+
+function jumpToSlowest(seq, event) {
+  if (event) event.stopPropagation();
+  state.highlightedSeq = seq;
+  switchTab('tree');
+  
+  const node = findTreeNode(seq);
+  if (node) {
+    expandPathToNode(node);
+    renderTree();
+    showEventDetail(seq);
+
+    setTimeout(() => {
+      const el = document.querySelector(`.tree-node[data-seq="${seq}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('jump-highlight');
+        setTimeout(() => el.classList.remove('jump-highlight'), 3000);
+      }
+    }, 150);
+  }
+}
+
+function findTreeNode(seq) {
+  function walk(nodes) {
+    for (const n of nodes) {
+      if (n.seq === seq) return n;
+      if (n.children) {
+        const found = walk(n.children);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  return walk(state.treeRoots);
+}
+
+function expandPathToNode(node) {
+  // We don't have parent pointers in the tree, so we need a search that keeps track of the path
+  function findPath(nodes, targetSeq, path) {
+    for (const n of nodes) {
+      if (n.seq === targetSeq) return true;
+      if (n.children && n.children.length > 0) {
+        path.push(n.seq);
+        if (findPath(n.children, targetSeq, path)) return true;
+        path.pop();
+      }
+    }
+    return false;
+  }
+  const path = [];
+  findPath(state.treeRoots, node.seq, path);
+  for (const seq of path) state.treeExpanded.add(seq);
+}
+
+function sortHotspots(col) {
+  if (state.hotspotsSortCol === col) {
+    state.hotspotsSortDir = state.hotspotsSortDir === 'asc' ? 'desc' : 'asc';
   } else {
-    state.analyticsSortCol = col;
-    state.analyticsSortDir = (col === 'ruleName' || col === 'eventType') ? 'asc' : 'desc';
+    state.hotspotsSortCol = col;
+    state.hotspotsSortDir = (col === 'ruleName' || col === 'eventType') ? 'asc' : 'desc';
   }
 
   document.querySelectorAll('.ah').forEach(ah => {
     ah.classList.remove('sorted', 'asc', 'desc');
     if (ah.dataset.col === col) {
-      ah.classList.add('sorted', state.analyticsSortDir);
+      ah.classList.add('sorted', state.hotspotsSortDir);
     }
   });
 
-  const dir = state.analyticsSortDir === 'asc' ? 1 : -1;
-  state.analyticsData.sort((a,b) => {
+  const dir = state.hotspotsSortDir === 'asc' ? 1 : -1;
+  state.hotspotsData.sort((a,b) => {
     let av = a[col], bv = b[col];
     if (av < bv) return -1 * dir;
     if (av > bv) return 1 * dir;
     return 0;
   });
-  renderAnalytics();
+  renderHotspots();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -713,8 +850,14 @@ function renderTree() {
 
   function flatten(nodes) {
     for (const node of nodes) {
-      if (gsearch.active) {
-        if (gsearch.matchedSeqs.has(node.seq) && (!errOnly || nodeHasError(node))) {
+      const isHotspotMatch = state.activeHotspotFilter && 
+                             (node.keyname || node.name || '') === state.activeHotspotFilter.ruleName && 
+                             (node.eventType || '') === state.activeHotspotFilter.eventType;
+
+      if (gsearch.active || state.activeHotspotFilter) {
+        const matches = gsearch.active ? gsearch.matchedSeqs.has(node.seq) : isHotspotMatch;
+        
+        if (matches && (!errOnly || nodeHasError(node))) {
           flat.push(node);
         }
         if (node.children.length) flatten(node.children);
@@ -753,6 +896,7 @@ function renderTreeNode(node) {
   const color = getEventColor(node.eventType);
 
   let rowClass = 'tree-node';
+  if (node.seq === state.highlightedSeq) rowClass += ' highlighted';
   if (node.stepStatus === 'Fail') rowClass += ' fail-node';
   else if (node.stepStatus === 'Warning') rowClass += ' warn-node';
   else if ((node.eventType||'').toLowerCase().includes('exception')) rowClass += ' exc-node';
@@ -862,6 +1006,13 @@ function filterTable() {
       else if (st !== 'Pass' && ev.stepStatus !== st) return false;
     }
     if (ty && ev.eventType !== ty) return false;
+
+    if (state.activeHotspotFilter) {
+      const matchName = (ev.keyname || ev.name || '') === state.activeHotspotFilter.ruleName;
+      const matchType = (ev.eventType || '') === state.activeHotspotFilter.eventType;
+      if (!matchName || !matchType) return false;
+    }
+
     return true;
   });
 
@@ -1943,7 +2094,7 @@ function switchTab(name) {
 
   if (name === 'flame') setTimeout(drawFlamegraph, 50);
   if (name === 'tree') renderTree();
-  if (name === 'analytics') renderAnalytics();
+  if (name === 'hotspots') renderHotspots();
   if (name === 'bookmarks') renderBookmarksPanel();
 }
 
@@ -2002,8 +2153,8 @@ function loadFile(file) {
       propagateOwnDuration(state.treeRoots, state.events);
       state.stats = buildStats(state.events); // rebuild after propagation
       state.flameNodes = buildFlameNodes(state.treeRoots);
-      state.analyticsData = buildAnalytics(state.events);
-      sortAnalytics('selfTime');
+      state.hotspotsData = buildHotspots(state.events);
+      sortHotspots('selfTime');
 
       updateTabBadges();
       populateTypeFilter();
@@ -2027,11 +2178,29 @@ function updateTabBadges() {
   });
 
   const sumTab = document.querySelector('.tab[data-tab="summary"]');
-  if (s.fails.length + s.exceptions.length > 0) {
+  if (s && s.fails && s.exceptions && (s.fails.length + s.exceptions.length > 0)) {
     const b = document.createElement('span');
-    b.className = 'tab-badge';
+    b.className = 'tab-badge warn';
     b.textContent = s.fails.length + s.exceptions.length;
     sumTab.appendChild(b);
+  }
+
+  // Table/Tree Filter Badges
+  if (state.activeHotspotFilter || gsearch.active) {
+    const tableTab = document.querySelector('.tab[data-tab="table"]');
+    const treeTab = document.querySelector('.tab[data-tab="tree"]');
+    
+    // For table, use filteredEvents count
+    const tb = document.createElement('span');
+    tb.className = 'tab-badge';
+    tb.textContent = state.filteredEvents.length;
+    tableTab.appendChild(tb);
+
+    // For tree, we'll use the flatTree count after it's been rendered
+    const trb = document.createElement('span');
+    trb.className = 'tab-badge';
+    trb.textContent = state.flatTree.length;
+    treeTab.appendChild(trb);
   }
 }
 

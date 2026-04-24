@@ -38,7 +38,7 @@
     <div class="tab" data-tab="tree">Tree</div>
     <div class="tab" data-tab="table">Table</div>
     <div class="tab" data-tab="flame">Flamegraph</div>
-    <div class="tab" data-tab="analytics" id="analytics-tab">Analytics</div>
+    <div class="tab" data-tab="hotspots" id="hotspots-tab">Hotspots</div>
     <div class="tab" data-tab="watch" id="watch-tab">Property Watch</div>
     <div class="tab" data-tab="bookmarks" id="bookmarks-tab">★ Bookmarks</div>
     <div class="tab" data-tab="search" id="search-tab" style="display:none">Search</div>
@@ -147,23 +147,30 @@
       </div>
     </div>
 
-    <!-- ANALYTICS -->
-    <div class="panel" id="panel-analytics">
-      <div id="analytics-panel" style="height:100%;display:flex;flex-direction:column;">
-        <div id="analytics-toolbar">
-          <span style="color:var(--muted);font-size:10px;">Aggregated by Rule Name / Step • Sorted by Self Time (Descending)</span>
-          <span id="analytics-count" style="margin-left:auto;color:var(--muted);font-size:10px;"></span>
+    <!-- HOTSPOTS -->
+    <div class="panel" id="panel-hotspots">
+      <div id="hotspots-panel" style="height:100%;display:flex;flex-direction:column;">
+        <div id="hotspots-toolbar">
+          <input type="text" id="hotspots-filter" placeholder="🔍 Filter rules..." oninput="onHotspotsFilterInput()">
+          <span style="color:var(--muted);font-size:10px;margin-left:12px;">Aggregated by Name / Type • Sorted by Self Time</span>
+          <span id="hotspots-count" style="margin-left:auto;color:var(--muted);font-size:10px;"></span>
         </div>
-        <div id="analytics-header">
-          <div class="ah sorted desc" data-col="selfTime" onclick="sortAnalytics('selfTime')">SELF TIME</div>
-          <div class="ah" data-col="totalTime" onclick="sortAnalytics('totalTime')">TOTAL TIME</div>
-          <div class="ah" data-col="hits" onclick="sortAnalytics('hits')">HITS</div>
-          <div class="ah" data-col="avgTime" onclick="sortAnalytics('avgTime')">AVG</div>
-          <div class="ah" data-col="ruleName" onclick="sortAnalytics('ruleName')">RULE NAME</div>
-          <div class="ah" data-col="eventType" onclick="sortAnalytics('eventType')">TYPE</div>
+        <div id="hotspots-focus-banner" class="hidden">
+           <span class="hfb-icon">🎯</span>
+           <span class="hfb-text">Focusing on: <b id="hfb-rule"></b></span>
+           <button class="hfb-clear" onclick="clearHotspotFilter()">✕ Clear Focus</button>
         </div>
-        <div id="analytics-scroller" style="flex:1;overflow-y:auto;">
-          <div id="analytics-rows"></div>
+        <div id="hotspots-header">
+          <div class="ah sorted desc" data-col="selfTime" onclick="sortHotspots('selfTime')" title="Time spent strictly within this rule (excl. children)">SELF TIME</div>
+          <div class="ah" data-col="dbTime" onclick="sortHotspots('dbTime')" title="Total time spent in DB/Connector calls triggered by this rule">I/O TIME</div>
+          <div class="ah" data-col="totalTime" onclick="sortHotspots('totalTime')" title="Entire duration of rule execution (incl. children)">TOTAL TIME</div>
+          <div class="ah" data-col="hits" onclick="sortHotspots('hits')">HITS</div>
+          <div class="ah" data-col="variance" onclick="sortHotspots('variance')" title="Execution consistency (Max - Min duration)">VARIANCE</div>
+          <div class="ah" data-col="ruleName" onclick="sortHotspots('ruleName')">RULE NAME</div>
+          <div class="ah" data-col="eventType" onclick="sortHotspots('eventType')">TYPE</div>
+        </div>
+        <div id="hotspots-scroller" style="flex:1;overflow-y:auto;">
+          <div id="hotspots-rows"></div>
         </div>
       </div>
     </div>
